@@ -159,6 +159,11 @@ Write-Host "🔄 Updating deployment parameters..." -ForegroundColor Yellow
 $parametersFile = Join-Path $infraPath "main.parameters.json"
 $parameters = Get-Content $parametersFile | ConvertFrom-Json
 $parameters.parameters.containerImage.value = $fullImageName
+# Ensure the container registry name in parameters matches the one supplied to this script to avoid stale values
+if ($parameters.parameters.containerRegistryName.value -ne $ContainerRegistryName) {
+    Write-Host "   Syncing containerRegistryName parameter: '$($parameters.parameters.containerRegistryName.value)' -> '$ContainerRegistryName'" -ForegroundColor Cyan
+    $parameters.parameters.containerRegistryName.value = $ContainerRegistryName
+}
 $parameters | ConvertTo-Json -Depth 10 | Set-Content $parametersFile
 
 if ($ValidateOnly) {

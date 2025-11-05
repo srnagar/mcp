@@ -15,7 +15,7 @@ RUN apk add --no-cache libc6-compat
 ENV ASPNETCORE_ENVIRONMENT="Development"
 ENV ASPNETCORE_URLS="http://+:1031"
 ENV AzureAd__TenantId="70a036f6-8e4d-4615-bad6-149c02e7720d"
-ENV AzureAd__ClientId="ca1e0302-d50a-47d7-b5e6-7aff49884bce"
+ENV AzureAd__ClientId="a846ca08-0b32-4641-8553-295403089caf"
 ENV AzureAd__Instance="https://login.microsoftonline.com/"
 
 # Copy the contents of the publish directory to '/azuremcpserver' and set it as the working directory

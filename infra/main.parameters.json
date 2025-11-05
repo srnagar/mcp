@@ -9,10 +9,10 @@
       "value": "dev"
     },
     "containerImage": {
-      "value": "acrazmcp.azurecr.io/azmcp-server:latest"
+      "value": "acrazmcpdev.azurecr.io/azmcp-server:latest"
     },
     "containerRegistryName": {
-      "value": "acrazmcp"
+      "value": "acrazmcpdev"
     },
     "targetPort": {
       "value": 1031
@@ -33,7 +33,7 @@
       "value": "70a036f6-8e4d-4615-bad6-149c02e7720d"
     },
     "azureAdClientId": {
-      "value": "ca1e0302-d50a-47d7-b5e6-7aff49884bce"
+      "value": "a846ca08-0b32-4641-8553-295403089caf"
     }
   }
 }

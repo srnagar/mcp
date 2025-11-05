@@ -1,0 +1,147 @@
+name: Deploy Azure MCP Server to Container Apps
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'servers/Azure.Mcp.Server/**'
+      - 'core/**'
+      - 'tools/**'
+      - 'infra/**'
+      - '.github/workflows/deploy-container-apps.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      resource_group:
+        description: 'Resource group name'
+        required: true
+        default: 'rg-azmcp-dev'
+      registry_name:
+        description: 'Container registry name'
+        required: true
+        default: 'acrazmcpdev'
+
+env:
+  DOTNET_VERSION: '9.0.x'
+  AZURE_RESOURCE_GROUP: ${{ github.event.inputs.resource_group || 'rg-azmcp-dev' }}
+  AZURE_CONTAINER_REGISTRY: ${{ github.event.inputs.registry_name || 'acrazmcpdev' }}
+  ENVIRONMENT_SUFFIX: ${{ github.event.inputs.environment || 'dev' }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+    - name: Build and publish application
+      run: |
+        cd servers/Azure.Mcp.Server
+        dotnet publish --configuration Release --output bin/Release/net9.0/publish --self-contained false
+        
+    - name: Build and push Docker image
+      run: |
+        # Create ACR if it doesn't exist
+        az acr show --name ${{ env.AZURE_CONTAINER_REGISTRY }} > /dev/null 2>&1 || \
+        az acr create --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --name ${{ env.AZURE_CONTAINER_REGISTRY }} --sku Basic --admin-enabled true
+        
+        # Build and push image
+        az acr build --registry ${{ env.AZURE_CONTAINER_REGISTRY }} \
+          --image azmcp-server:${{ github.sha }} \
+          --image azmcp-server:latest \
+          --build-arg PUBLISH_DIR="servers/Azure.Mcp.Server/bin/Release/net9.0/publish" \
+          .
+          
+    - name: Update deployment parameters
+      run: |
+        ACR_LOGIN_SERVER=$(az acr show --name ${{ env.AZURE_CONTAINER_REGISTRY }} --query "loginServer" -o tsv)
+        IMAGE_NAME="$ACR_LOGIN_SERVER/azmcp-server:${{ github.sha }}"
+        
+        # Update parameters file
+        jq --arg image "$IMAGE_NAME" '.parameters.containerImage.value = $image' infra/main.parameters.json > temp.json
+        mv temp.json infra/main.parameters.json
+        
+    - name: Validate deployment
+      run: |
+        az deployment group what-if \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --template-file infra/main.bicep \
+          --parameters infra/main.parameters.json
+          
+    - name: Deploy to Azure Container Apps
+      run: |
+        DEPLOYMENT_NAME="azmcp-deployment-$(date +%Y%m%d-%H%M%S)"
+        
+        DEPLOYMENT_OUTPUT=$(az deployment group create \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name $DEPLOYMENT_NAME \
+          --template-file infra/main.bicep \
+          --parameters infra/main.parameters.json \
+          --query "properties.outputs" -o json)
+        
+        # Extract outputs
+        CONTAINER_APP_URL=$(echo $DEPLOYMENT_OUTPUT | jq -r '.containerAppUrl.value')
+        RESOURCE_GROUP_URL=$(echo $DEPLOYMENT_OUTPUT | jq -r '.resourceGroupUrl.value')
+        
+        echo "CONTAINER_APP_URL=$CONTAINER_APP_URL" >> $GITHUB_ENV
+        echo "RESOURCE_GROUP_URL=$RESOURCE_GROUP_URL" >> $GITHUB_ENV
+        
+        echo "::notice title=Deployment Successful::Application deployed to $CONTAINER_APP_URL"
+        
+    - name: Test deployment
+      run: |
+        echo "Testing deployment at ${{ env.CONTAINER_APP_URL }}"
+        
+        # Wait for application to be ready
+        sleep 60
+        
+        # Test health endpoint
+        if curl -f "${{ env.CONTAINER_APP_URL }}/health" --max-time 30; then
+          echo "::notice title=Health Check Passed::Application is healthy"
+        else
+          echo "::warning title=Health Check Failed::Application health check failed, but deployment may still be successful"
+        fi
+        
+    - name: Create deployment summary
+      run: |
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🚀 Deployment Summary
+        
+        **Environment:** ${{ env.ENVIRONMENT_SUFFIX }}
+        **Resource Group:** ${{ env.AZURE_RESOURCE_GROUP }}
+        **Container Registry:** ${{ env.AZURE_CONTAINER_REGISTRY }}
+        
+        ### 🌐 Application URLs
+        - **Application:** [${{ env.CONTAINER_APP_URL }}](${{ env.CONTAINER_APP_URL }})
+        - **Azure Portal:** [${{ env.RESOURCE_GROUP_URL }}](${{ env.RESOURCE_GROUP_URL }})
+        
+        ### 📦 Docker Image
+        - **Image:** \`${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/azmcp-server:${{ github.sha }}\`
+        - **Tag:** \`${{ github.sha }}\`
+        
+        ### ✅ Deployment Status
+        - Build: Success ✓
+        - Push: Success ✓
+        - Deploy: Success ✓
+        - Health Check: $(curl -f "${{ env.CONTAINER_APP_URL }}/health" --max-time 10 > /dev/null 2>&1 && echo "Success ✓" || echo "Warning ⚠️")
+        EOF

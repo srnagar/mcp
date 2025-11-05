@@ -1,5 +1,5 @@
 # Build the runtime image
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS runtime
 
 # Add build argument for publish directory
 ARG PUBLISH_DIR
@@ -10,6 +10,13 @@ RUN if [ -z "$PUBLISH_DIR" ]; then \
     fi
 
 RUN apk add --no-cache libc6-compat
+
+# Set environment variables
+ENV ASPNETCORE_ENVIRONMENT="Development"
+ENV ASPNETCORE_URLS="http://+:1031"
+ENV AzureAd__TenantId="70a036f6-8e4d-4615-bad6-149c02e7720d"
+ENV AzureAd__ClientId="ca1e0302-d50a-47d7-b5e6-7aff49884bce"
+ENV AzureAd__Instance="https://login.microsoftonline.com/"
 
 # Copy the contents of the publish directory to '/azuremcpserver' and set it as the working directory
 RUN mkdir -p /azuremcpserver
@@ -26,4 +33,4 @@ RUN if [ ! -f "azmcp" ]; then \
     && chmod +x azmcp \
     && test -x azmcp
 
-ENTRYPOINT ["./azmcp", "server", "start"]
+ENTRYPOINT ["./azmcp", "server", "start", "--mode", "all", "--run-as-remote-http-service", "--outgoing-auth-strategy", "UseHostingEnvironmentIdentity"]

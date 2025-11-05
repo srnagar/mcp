@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": {
+      "value": "azmcp-server"
+    },
+    "environmentSuffix": {
+      "value": "dev"
+    },
+    "containerImage": {
+      "value": "acrazmcp.azurecr.io/azmcp-server:latest"
+    },
+    "containerRegistryName": {
+      "value": "acrazmcp"
+    },
+    "targetPort": {
+      "value": 1031
+    },
+    "minReplicas": {
+      "value": 1
+    },
+    "maxReplicas": {
+      "value": 3
+    },
+    "cpuCores": {
+      "value": "1.0"
+    },
+    "memorySize": {
+      "value": "2.0Gi"
+    },
+    "azureAdTenantId": {
+      "value": "70a036f6-8e4d-4615-bad6-149c02e7720d"
+    },
+    "azureAdClientId": {
+      "value": "ca1e0302-d50a-47d7-b5e6-7aff49884bce"
+    }
+  }
+}

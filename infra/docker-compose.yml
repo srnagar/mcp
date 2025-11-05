@@ -1,0 +1,21 @@
+# Docker Compose for local testing of Azure MCP Server
+version: '3.8'
+
+services:
+  azmcp-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        PUBLISH_DIR: "../servers/Azure.Mcp.Server/src/bin/Release/net9.0/linux-x64/publish"
+    ports:
+      - "1031:1031"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:1031
+      - AzureAd__TenantId=70a036f6-8e4d-4615-bad6-149c02e7720d
+      - AzureAd__ClientId=ca1e0302-d50a-47d7-b5e6-7aff49884bce
+      - AzureAd__Instance=https://login.microsoftonline.com/
+    volumes:
+      - ~/.azure:/root/.azure:ro  # Mount Azure CLI credentials
+    restart: unless-stopped

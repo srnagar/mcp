@@ -1,0 +1,36 @@
+# Dockerfile for Azure MCP Server in Remote/HTTP mode
+# This Dockerfile is optimized for running the Azure MCP Server as a remote HTTP service
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS runtime
+
+# Install necessary dependencies
+RUN apk add --no-cache libc6-compat
+
+# Create working directory
+WORKDIR /mcp-server
+
+# Add build argument for publish directory (relative path from repo root)
+ARG PUBLISH_DIR=.work/build/Azure.Mcp.Server/linux-x64-untrimmed
+
+# Copy the published application
+COPY ${PUBLISH_DIR}/ ./
+
+# Ensure the azmcp executable exists and is executable
+RUN chmod +x azmcp && test -x azmcp
+
+# Set default environment variables
+# These will be overridden by Azure Container Apps configuration
+ENV ASPNETCORE_URLS="http://+:8080"
+ENV ASPNETCORE_ENVIRONMENT="Production"
+
+# Expose the default port
+EXPOSE 8080
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+
+# Run the server in remote HTTP mode
+# Use CMD instead of ENTRYPOINT to allow Azure Container Apps to override if needed
+# Default: Use hosting environment identity for Azure authentication
+CMD ["./azmcp", "server", "start", "--transport", "http", "--outgoing-auth-strategy", "UseHostingEnvironmentIdentity"]

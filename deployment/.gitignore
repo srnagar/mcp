@@ -1,0 +1,10 @@
+# Deployment artifacts
+.last-deployment.json
+*.log
+
+# Azure specific
+*.azurecli
+
+# Local environment files
+.env
+.env.local

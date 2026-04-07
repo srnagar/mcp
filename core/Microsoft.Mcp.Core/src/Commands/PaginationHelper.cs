@@ -3,9 +3,10 @@
 
 using System.Security.Cryptography;
 using System.Text;
-using Azure.Mcp.Core.Models.Option;
+using Microsoft.Mcp.Core.Models.Option;
 using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Services.Pagination;
+using Microsoft.Mcp.Core.Extensions;
 
 namespace Microsoft.Mcp.Core.Commands;
 

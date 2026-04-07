@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using Azure.Mcp.Core.Extensions;
-using Azure.Mcp.Core.Models.Option;
 using Azure.Mcp.Tools.EventGrid.Options.Topic;
 using Azure.Mcp.Tools.EventGrid.Services;
 using Microsoft.Extensions.Options;
 using Microsoft.Mcp.Core.Commands;
+using Microsoft.Mcp.Core.Extensions;
 using Microsoft.Mcp.Core.Models.Command;
+using Microsoft.Mcp.Core.Models.Option;
 using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Services.Pagination;
 
@@ -133,8 +133,8 @@ public sealed class TopicListCommand(
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Error listing Event Grid topics. Subscription: {Subscription}, Options: {@Options}",
-                options.Subscription, options);
+                "Error listing Event Grid topics. Subscription: {Subscription}.",
+                options.Subscription);
             HandleException(context, ex);
         }
 

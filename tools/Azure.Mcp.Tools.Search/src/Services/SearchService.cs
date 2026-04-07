@@ -4,12 +4,9 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Azure.Core.Pipeline;
-using Azure.Mcp.Core.Options;
 using Azure.Mcp.Core.Services.Azure;
-using Azure.Mcp.Core.Services.Azure.Authentication;
 using Azure.Mcp.Core.Services.Azure.Subscription;
 using Azure.Mcp.Core.Services.Azure.Tenant;
-using Azure.Mcp.Core.Services.Caching;
 using Azure.Mcp.Tools.Search.Commands;
 using Azure.Mcp.Tools.Search.Models;
 using Azure.ResourceManager.Search;
@@ -20,6 +17,9 @@ using Azure.Search.Documents.KnowledgeBases;
 using Azure.Search.Documents.KnowledgeBases.Models;
 using Azure.Search.Documents.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Mcp.Core.Options;
+using Microsoft.Mcp.Core.Services.Azure.Authentication;
+using Microsoft.Mcp.Core.Services.Caching;
 
 namespace Azure.Mcp.Tools.Search.Services;
 
@@ -399,6 +399,12 @@ public sealed partial class SearchService(
         {
             throw new ArgumentException(
                 "Service name must only contain lowercase letters, digits, or dashes, cannot start or end with dashes, and must be between 2 and 60 characters in length.", nameof(serviceName));
+        }
+
+        if (serviceName[1] == '-')
+        {
+            throw new ArgumentException(
+                "Service name must not have a dash as its second character.", nameof(serviceName));
         }
 
         if (serviceName.Contains("--", StringComparison.Ordinal))

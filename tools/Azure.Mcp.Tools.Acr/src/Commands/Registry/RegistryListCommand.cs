@@ -136,8 +136,8 @@ public sealed class RegistryListCommand(
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Error listing container registries. Subscription: {Subscription}, ResourceGroup: {ResourceGroup}, Options: {@Options}",
-                options.Subscription, options.ResourceGroup, options);
+                "Error listing container registries. Subscription: {Subscription}, ResourceGroup: {ResourceGroup}.",
+                options.Subscription, options.ResourceGroup);
             HandleException(context, ex);
         }
 

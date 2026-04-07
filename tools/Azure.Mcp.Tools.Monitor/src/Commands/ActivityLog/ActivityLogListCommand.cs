@@ -3,13 +3,13 @@
 
 using System.Net;
 using Azure.Mcp.Core.Commands.Subscription;
-using Azure.Mcp.Core.Models.Option;
 using Azure.Mcp.Tools.Monitor.Models.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Options.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Mcp.Core.Commands;
+using Microsoft.Mcp.Core.Extensions;
 using Microsoft.Mcp.Core.Models.Command;
 using Microsoft.Mcp.Core.Models.Option;
 using Microsoft.Mcp.Core.Models.Pagination;
@@ -153,8 +153,8 @@ public sealed class ActivityLogListCommand(
         catch (Exception ex)
         {
             logger.LogError(ex,
-                "Error listing activity logs. ResourceName: {ResourceName}, ResourceType: {ResourceType}, Hours: {Hours}, Options: {@Options}",
-                options.ResourceName, options.ResourceType, options.Hours, options);
+                "Error listing activity logs. ResourceName: {ResourceName}, ResourceType: {ResourceType}, Hours: {Hours}.",
+                options.ResourceName, options.ResourceType, options.Hours);
             HandleException(context, ex);
         }
 

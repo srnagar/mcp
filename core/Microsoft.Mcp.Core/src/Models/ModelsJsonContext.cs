@@ -7,7 +7,7 @@ using Microsoft.Mcp.Core.Commands;
 using Microsoft.Mcp.Core.Models.Command;
 using Microsoft.Mcp.Core.Models.Pagination;
 
-namespace Azure.Mcp.Core.Models;
+namespace Microsoft.Mcp.Core.Models;
 
 [JsonSerializable(typeof(List<CommandInfo>))]
 [JsonSerializable(typeof(CommandResponse))]

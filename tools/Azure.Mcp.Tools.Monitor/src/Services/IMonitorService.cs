@@ -8,6 +8,8 @@ using Azure.Mcp.Tools.Monitor.Models.ActivityLog;
 
 namespace Azure.Mcp.Tools.Monitor.Services;
 
+public sealed record ActivityLogPagedResult(List<ActivityLogEventData> Items, string? NextLink);
+
 public interface IMonitorService
 {
     Task<List<JsonNode>> QueryResourceLogs(
@@ -70,6 +72,19 @@ public interface IMonitorService
         double hours = 24.0,
         ActivityLogEventLevel? eventLevel = null,
         int top = 10,
+        string? tenant = null,
+        RetryPolicyOptions? retryPolicy = null,
+        CancellationToken cancellationToken = default);
+
+    Task<ActivityLogPagedResult> ListActivityLogsPaged(
+        string subscription,
+        string resourceName,
+        string? resourceGroup = null,
+        string? resourceType = null,
+        double hours = 24.0,
+        ActivityLogEventLevel? eventLevel = null,
+        int pageSize = 50,
+        string? nextLink = null,
         string? tenant = null,
         RetryPolicyOptions? retryPolicy = null,
         CancellationToken cancellationToken = default);

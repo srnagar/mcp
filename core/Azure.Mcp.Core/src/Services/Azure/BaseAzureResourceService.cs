@@ -11,6 +11,7 @@ using Azure.ResourceManager;
 using Azure.ResourceManager.ResourceGraph;
 using Azure.ResourceManager.ResourceGraph.Models;
 using Azure.ResourceManager.Resources;
+using Microsoft.Extensions.Logging;
 
 namespace Azure.Mcp.Core.Services.Azure;
 
@@ -89,7 +90,8 @@ public abstract class BaseAzureResourceService(
         string? additionalFilter = null,
         int limit = 50,
         CancellationToken cancellationToken = default,
-        string? tenant = null)
+        string? tenant = null,
+        int skip = 0)
     {
         ValidateRequiredParameters((nameof(resourceType), resourceType), (nameof(subscription), subscription));
         ArgumentNullException.ThrowIfNull(converter);
@@ -119,11 +121,19 @@ public abstract class BaseAzureResourceService(
         {
             queryFilter += $" and {additionalFilter}";
         }
-        queryFilter += $" | limit {limit}";
+
+        // Request one extra item beyond the limit to detect if more results exist
+        int queryLimit = limit + 1;
+        queryFilter += $" | sort by id asc";
 
         var queryContent = new ResourceQueryContent(queryFilter)
         {
-            Subscriptions = { subscriptionResource.Data.SubscriptionId }
+            Subscriptions = { subscriptionResource.Data.SubscriptionId },
+            Options = new ResourceQueryRequestOptions
+            {
+                Top = queryLimit,
+                Skip = skip
+            }
         };
 
         ResourceQueryResult result = await tenantResource.GetResourcesAsync(queryContent, cancellationToken);
@@ -140,7 +150,16 @@ public abstract class BaseAzureResourceService(
             }
         }
 
-        return new ResourceQueryResults<T>(results, result?.ResultTruncated == ResultTruncated.True);
+        // If we got more than limit items, there are more results available
+        bool hasMore = results.Count > limit;
+        if (hasMore)
+        {
+            results = results.Take(limit).ToList();
+        }
+
+        int nextOffset = skip + results.Count;
+
+        return new ResourceQueryResults<T>(results, hasMore || result?.ResultTruncated == ResultTruncated.True, nextOffset);
     }
 
     /// <summary>
@@ -241,4 +260,4 @@ public abstract class BaseAzureResourceService(
     }
 }
 
-public sealed record ResourceQueryResults<T>(List<T> Results, bool AreResultsTruncated);
+public sealed record ResourceQueryResults<T>(List<T> Results, bool AreResultsTruncated, int NextOffset = 0);

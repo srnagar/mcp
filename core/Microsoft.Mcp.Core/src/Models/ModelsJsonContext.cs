@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Mcp.Core.Areas.Tools.Commands;
 using Microsoft.Mcp.Core.Commands;
 using Microsoft.Mcp.Core.Models.Command;
+using Microsoft.Mcp.Core.Models.Pagination;
 
 namespace Azure.Mcp.Core.Models;
 
@@ -13,6 +14,7 @@ namespace Azure.Mcp.Core.Models;
 [JsonSerializable(typeof(ETag), TypeInfoPropertyName = "McpETag")]
 [JsonSerializable(typeof(ToolMetadata))]
 [JsonSerializable(typeof(ToolsListCommand.ToolNamesResult))]
+[JsonSerializable(typeof(PaginationInfo))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 public sealed partial class ModelsJsonContext : JsonSerializerContext
 {

@@ -12,7 +12,9 @@ public interface IAcrService
         string? resourceGroup = null,
         string? tenant = null,
         RetryPolicyOptions? retryPolicy = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        int limit = 50,
+        int skip = 0);
 
     Task<Dictionary<string, List<string>>> ListRegistryRepositories(
         string subscription,

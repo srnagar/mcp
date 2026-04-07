@@ -3,6 +3,8 @@
 
 namespace Azure.Mcp.Tools.EventGrid.Services;
 
+public sealed record EventGridPagedResult<T>(List<T> Items, string? ContinuationToken);
+
 public interface IEventGridService
 {
     Task<List<EventGridTopicInfo>> GetTopicsAsync(
@@ -10,6 +12,15 @@ public interface IEventGridService
         string? resourceGroup = null,
         string? tenant = null,
         RetryPolicyOptions? retryPolicy = null,
+        CancellationToken cancellationToken = default);
+
+    Task<EventGridPagedResult<EventGridTopicInfo>> GetTopicsPagedAsync(
+        string subscription,
+        string? resourceGroup = null,
+        string? tenant = null,
+        RetryPolicyOptions? retryPolicy = null,
+        int pageSize = 50,
+        string? continuationToken = null,
         CancellationToken cancellationToken = default);
 
     Task<List<EventGridSubscriptionInfo>> GetSubscriptionsAsync(

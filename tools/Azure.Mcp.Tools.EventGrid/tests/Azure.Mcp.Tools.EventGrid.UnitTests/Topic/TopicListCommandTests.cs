@@ -10,7 +10,10 @@ using Azure.Mcp.Tools.EventGrid.Commands.Topic;
 using Azure.Mcp.Tools.EventGrid.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Mcp.Core.Models.Command;
+using Microsoft.Mcp.Core.Models.Pagination;
+using Microsoft.Mcp.Core.Services.Pagination;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Xunit;
@@ -22,6 +25,8 @@ public class TopicListCommandTests
     private readonly IServiceProvider _serviceProvider;
     private readonly IEventGridService _eventGridService;
     private readonly ILogger<TopicListCommand> _logger;
+    private readonly IPaginationCursorRegistry _cursorRegistry;
+    private readonly IOptions<PaginationOptions> _paginationOptions;
     private readonly TopicListCommand _command;
     private readonly CommandContext _context;
     private readonly Command _commandDefinition;
@@ -30,11 +35,13 @@ public class TopicListCommandTests
     {
         _eventGridService = Substitute.For<IEventGridService>();
         _logger = Substitute.For<ILogger<TopicListCommand>>();
+        _cursorRegistry = Substitute.For<IPaginationCursorRegistry>();
+        _paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions());
 
         var collection = new ServiceCollection().AddSingleton(_eventGridService);
 
         _serviceProvider = collection.BuildServiceProvider();
-        _command = new(_logger, _eventGridService);
+        _command = new(_logger, _eventGridService, _cursorRegistry, _paginationOptions);
         _context = new(_serviceProvider);
         _commandDefinition = _command.GetCommand();
     }
@@ -50,8 +57,8 @@ public class TopicListCommandTests
             new("topic2", "westus", "https://topic2.westus.eventgrid.azure.net/api/events", "Succeeded", "Enabled", "EventGridSchema")
         };
 
-        _eventGridService.GetTopicsAsync(Arg.Is(subscriptionId), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(expectedTopics));
+        _eventGridService.GetTopicsPagedAsync(Arg.Is(subscriptionId), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new EventGridPagedResult<Models.EventGridTopicInfo>(expectedTopics, null));
 
         var args = _commandDefinition.Parse(["--subscription", subscriptionId]);
 
@@ -77,8 +84,8 @@ public class TopicListCommandTests
         // Arrange
         var subscriptionId = "sub123";
 
-        _eventGridService.GetTopicsAsync(Arg.Is(subscriptionId), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<CancellationToken>())
-            .Returns([]);
+        _eventGridService.GetTopicsPagedAsync(Arg.Is(subscriptionId), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new EventGridPagedResult<Models.EventGridTopicInfo>([], null));
 
         var args = _commandDefinition.Parse(["--subscription", subscriptionId]);
 
@@ -103,7 +110,7 @@ public class TopicListCommandTests
         var expectedError = "Test error";
         var subscriptionId = "sub123";
 
-        _eventGridService.GetTopicsAsync(Arg.Is(subscriptionId), null, Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<CancellationToken>())
+        _eventGridService.GetTopicsPagedAsync(Arg.Is(subscriptionId), null, Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new Exception(expectedError));
 
         var args = _commandDefinition.Parse(["--subscription", subscriptionId]);
@@ -133,8 +140,8 @@ public class TopicListCommandTests
                 new("topic1", "eastus", "https://topic1.eastus.eventgrid.azure.net/api/events", "Succeeded", "Enabled", "EventGridSchema"),
                 new("topic2", "westus", "https://topic2.westus.eventgrid.azure.net/api/events", "Succeeded", "Enabled", "EventGridSchema")
             };
-            _eventGridService.GetTopicsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<CancellationToken>())
-                .Returns(expectedTopics);
+            _eventGridService.GetTopicsPagedAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<RetryPolicyOptions>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new EventGridPagedResult<Models.EventGridTopicInfo>(expectedTopics, null));
         }
 
         var parseResult = _commandDefinition.Parse(args.Split(' ', StringSplitOptions.RemoveEmptyEntries));

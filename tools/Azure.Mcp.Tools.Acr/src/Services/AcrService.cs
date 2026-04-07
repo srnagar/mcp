@@ -24,7 +24,9 @@ public sealed class AcrService(ISubscriptionService subscriptionService, ITenant
         string? resourceGroup = null,
         string? tenant = null,
         RetryPolicyOptions? retryPolicy = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int limit = 50,
+        int skip = 0)
     {
         ValidateRequiredParameters((nameof(subscription), subscription));
 
@@ -35,7 +37,9 @@ public sealed class AcrService(ISubscriptionService subscriptionService, ITenant
             retryPolicy,
             ConvertToAcrRegistryInfoModel,
             tenant: tenant,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken,
+            limit: limit,
+            skip: skip);
 
         return registries;
     }

@@ -51,6 +51,58 @@ public class EventGridService(ISubscriptionService subscriptionService, ITenantS
         return topics;
     }
 
+    public async Task<EventGridPagedResult<EventGridTopicInfo>> GetTopicsPagedAsync(
+        string subscription,
+        string? resourceGroup = null,
+        string? tenant = null,
+        RetryPolicyOptions? retryPolicy = null,
+        int pageSize = 50,
+        string? continuationToken = null,
+        CancellationToken cancellationToken = default)
+    {
+        var subscriptionResource = await _subscriptionService.GetSubscription(subscription, tenant, retryPolicy, cancellationToken);
+        var topics = new List<EventGridTopicInfo>();
+        string? nextContinuationToken = null;
+
+        if (!string.IsNullOrEmpty(resourceGroup))
+        {
+            var resourceGroupResource = await subscriptionResource
+                .GetResourceGroupAsync(resourceGroup, cancellationToken);
+
+            var pages = resourceGroupResource.Value.GetEventGridTopics()
+                .GetAllAsync(cancellationToken: cancellationToken)
+                .AsPages(continuationToken, pageSize);
+
+            await foreach (var page in pages)
+            {
+                foreach (var topic in page.Values)
+                {
+                    topics.Add(CreateTopicInfo(topic.Data));
+                }
+                nextContinuationToken = page.ContinuationToken;
+                break; // Only take one page
+            }
+        }
+        else
+        {
+            var pages = subscriptionResource
+                .GetEventGridTopicsAsync(cancellationToken: cancellationToken)
+                .AsPages(continuationToken, pageSize);
+
+            await foreach (var page in pages)
+            {
+                foreach (var topic in page.Values)
+                {
+                    topics.Add(CreateTopicInfo(topic.Data));
+                }
+                nextContinuationToken = page.ContinuationToken;
+                break; // Only take one page
+            }
+        }
+
+        return new EventGridPagedResult<EventGridTopicInfo>(topics, nextContinuationToken);
+    }
+
     public async Task<List<EventGridSubscriptionInfo>> GetSubscriptionsAsync(
         string subscription,
         string? resourceGroup = null,

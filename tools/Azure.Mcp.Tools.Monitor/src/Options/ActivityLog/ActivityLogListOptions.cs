@@ -22,4 +22,6 @@ public class ActivityLogListOptions : BaseMonitorOptions
 
     [JsonPropertyName(ActivityLogOptionDefinitions.TopName)]
     public int? Top { get; set; }
+
+    public string? NextCursor { get; set; }
 }

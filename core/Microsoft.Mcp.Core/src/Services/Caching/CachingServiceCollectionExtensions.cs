@@ -3,6 +3,8 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Mcp.Core.Models.Pagination;
+using Microsoft.Mcp.Core.Services.Pagination;
 
 namespace Azure.Mcp.Core.Services.Caching;
 
@@ -30,6 +32,7 @@ public static class CachingServiceCollectionExtensions
     public static IServiceCollection AddSingleUserCliCacheService(this IServiceCollection services)
     {
         services.TryAddSingleton<ICacheService, SingleUserCliCacheService>();
+        services.AddPaginationServices();
         return services;
     }
 
@@ -52,6 +55,18 @@ public static class CachingServiceCollectionExtensions
     public static IServiceCollection AddHttpServiceCacheService(this IServiceCollection services)
     {
         services.AddSingleton<ICacheService, HttpServiceCacheService>();
+        services.AddPaginationServices();
+        return services;
+    }
+
+    /// <summary>
+    /// Adds pagination cursor registry and configuration services.
+    /// </summary>
+    private static IServiceCollection AddPaginationServices(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IPaginationCursorRegistry, PaginationCursorRegistry>();
+        services.AddOptions<PaginationOptions>()
+            .BindConfiguration(PaginationOptions.SectionName);
         return services;
     }
 }

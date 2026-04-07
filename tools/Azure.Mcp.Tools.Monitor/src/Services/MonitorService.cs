@@ -386,6 +386,71 @@ public class MonitorService(
         return activityLogs.Take(top).ToList();
     }
 
+    public async Task<ActivityLogPagedResult> ListActivityLogsPaged(
+        string subscription,
+        string resourceName,
+        string? resourceGroup,
+        string? resourceType,
+        double hours,
+        ActivityLogEventLevel? eventLevel,
+        int pageSize,
+        string? nextLink,
+        string? tenant,
+        RetryPolicyOptions? retryPolicy,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredParameters((nameof(subscription), subscription), (nameof(resourceName), resourceName));
+
+        if (pageSize < 1)
+        {
+            pageSize = 50;
+        }
+
+        string? requestUrl;
+
+        if (!string.IsNullOrEmpty(nextLink))
+        {
+            // Use the nextLink URL directly for subsequent pages
+            requestUrl = nextLink;
+        }
+        else
+        {
+            // Build the initial request URL for the first page
+            var resourceIdentifier = await resourceResolverService.ResolveResourceIdAsync(
+                subscription, resourceGroup, resourceType, resourceName, tenant, retryPolicy, cancellationToken);
+
+            string resourceId = resourceIdentifier.ToString();
+            string subscriptionId = resourceIdentifier.SubscriptionId
+                ?? throw new ArgumentException($"Unable to extract subscription ID from resource ID: {resourceId}");
+
+            string endpoint = GetLogActivityEndpointString(subscriptionId);
+            var uriBuilder = new UriBuilder(endpoint);
+
+            DateTimeOffset startDate = DateTimeOffset.UtcNow.AddHours(-hours).ToUniversalTime();
+            DateTimeOffset endDate = DateTimeOffset.UtcNow;
+            string filter = $"eventTimestamp ge '{startDate:yyyy-MM-ddTHH:mm:ss.fffZ}' " +
+                           $"and eventTimestamp le '{endDate:yyyy-MM-ddTHH:mm:ss.fffZ}' " +
+                           $"and resourceId eq '{resourceId}'";
+
+            if (eventLevel != null)
+            {
+                filter += $" and levels eq '{eventLevel}'";
+            }
+
+            string query = $"api-version={ActivityLogApiVersion}&$filter={Uri.EscapeDataString(filter)}";
+            uriBuilder.Query = query;
+            requestUrl = uriBuilder.Uri.ToString();
+        }
+
+        var accessToken = await GetArmAccessTokenAsync(tenant, cancellationToken);
+
+        // Fetch only one page
+        var listResponse = await MakeActivityLogRequestAsync(requestUrl, accessToken.Token, cancellationToken);
+        var items = listResponse.Value.Take(pageSize).ToList();
+
+        return new ActivityLogPagedResult(items, listResponse.NextLink);
+    }
+
     private async Task<List<ActivityLogEventData>> CallActivityLogApiAsync(
         string subscriptionId,
         string resourceId,

@@ -280,6 +280,12 @@ public sealed class CommandFactoryToolLoader(
             meta ??= new();
             meta["LocalRequiredHint"] = metadata.LocalRequired;
         }
+        // Add SupportsPagination metadata to tool.Meta if the property exists
+        if (metadata.SupportsPagination)
+        {
+            meta ??= new();
+            meta["PaginationHint"] = metadata.SupportsPagination;
+        }
         tool.Meta = meta;
 
         var options = command.GetCommand().Options;

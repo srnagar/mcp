@@ -12,6 +12,9 @@ using Azure.Mcp.Tools.Monitor.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Mcp.Core.Models.Command;
+using Microsoft.Extensions.Options;
+using Microsoft.Mcp.Core.Models.Pagination;
+using Microsoft.Mcp.Core.Services.Pagination;
 using NSubstitute;
 using Xunit;
 
@@ -38,7 +41,9 @@ public sealed class ActivityLogListCommandTests
         collection.AddSingleton(_monitorService);
         _serviceProvider = collection.BuildServiceProvider();
 
-        _command = new(_logger);
+        var cursorRegistry = Substitute.For<IPaginationCursorRegistry>();
+        var paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions());
+        _command = new(_logger, cursorRegistry, paginationOptions);
         _context = new(_serviceProvider);
         _commandDefinition = _command.GetCommand();
     }
@@ -47,8 +52,7 @@ public sealed class ActivityLogListCommandTests
     [InlineData($"--subscription {_knownSubscription} --resource-name {_knownResourceName}", true)]
     [InlineData($"--subscription {_knownSubscription} --resource-name {_knownResourceName} --hours 2", true)]
     [InlineData($"--subscription {_knownSubscription} --resource-name {_knownResourceName} --event-level Error", true)]
-    [InlineData($"--subscription {_knownSubscription} --resource-name {_knownResourceName} --top 20", true)]
-    [InlineData($"--subscription {_knownSubscription}", false)]
+        [InlineData($"--subscription {_knownSubscription}", false)]
     [InlineData("", false)]
     public async Task ExecuteAsync_ValidatesInputCorrectly(string args, bool shouldSucceed)
     {
@@ -67,18 +71,19 @@ public sealed class ActivityLogListCommandTests
                     Properties = new Dictionary<string, object>()
                 }
             };
-            _monitorService.ListActivityLogs(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<double>(),
-                Arg.Any<ActivityLogEventLevel?>(),
-                Arg.Any<int>(),
-                Arg.Any<string>(),
-                Arg.Any<RetryPolicyOptions>(),
-                Arg.Any<CancellationToken>())
-                .Returns(testActivityLogs);
+            _monitorService.ListActivityLogsPaged(
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<double>(),
+            Arg.Any<ActivityLogEventLevel?>(),
+            Arg.Any<int>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<RetryPolicyOptions>(),
+            Arg.Any<CancellationToken>())
+                .Returns(new ActivityLogPagedResult(testActivityLogs, null));
         }
 
         // Act
@@ -123,7 +128,7 @@ public sealed class ActivityLogListCommandTests
             }
         };
 
-        _monitorService.ListActivityLogs(
+        _monitorService.ListActivityLogsPaged(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -132,9 +137,10 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
             Arg.Any<string>(),
+            Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(expectedActivityLogs);
+            .Returns(new ActivityLogPagedResult(expectedActivityLogs, null));
 
         // Act
         var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse($"--subscription {_knownSubscription} --resource-name {_knownResourceName}"), TestContext.Current.CancellationToken);
@@ -144,7 +150,7 @@ public sealed class ActivityLogListCommandTests
         Assert.NotNull(response.Results);
 
         // Verify the mock was called
-        await _monitorService.Received(1).ListActivityLogs(
+        await _monitorService.Received(1).ListActivityLogsPaged(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -152,6 +158,7 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<double>(),
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
+            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>());
@@ -171,7 +178,7 @@ public sealed class ActivityLogListCommandTests
     public async Task ExecuteAsync_ReturnsEmptyListWhenNoActivityLogs()
     {
         // Arrange
-        _monitorService.ListActivityLogs(
+        _monitorService.ListActivityLogsPaged(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -180,9 +187,10 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
             Arg.Any<string>(),
+            Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(new List<ActivityLogEventData>());
+            .Returns(new ActivityLogPagedResult([], null));
 
         // Act
         var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse($"--subscription {_knownSubscription} --resource-name {_knownResourceName}"), TestContext.Current.CancellationToken);
@@ -202,7 +210,7 @@ public sealed class ActivityLogListCommandTests
     public async Task ExecuteAsync_HandlesServiceErrors()
     {
         // Arrange
-        _monitorService.ListActivityLogs(
+        _monitorService.ListActivityLogsPaged(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -211,9 +219,10 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
             Arg.Any<string>(),
+            Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<List<ActivityLogEventData>>(new Exception("Test error")));
+            .Returns(Task.FromException<ActivityLogPagedResult>(new Exception("Test error")));
 
         // Act
         var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse($"--subscription {_knownSubscription} --resource-name {_knownResourceName}"), TestContext.Current.CancellationToken);
@@ -227,14 +236,13 @@ public sealed class ActivityLogListCommandTests
     [Theory]
     [InlineData("--resource-name myResource --hours 24", true)]
     [InlineData("--resource-name myResource --event-level Critical", true)]
-    [InlineData("--resource-name myResource --top 5", true)]
     [InlineData("--resource-name myResource --resource-type Microsoft.Storage/storageAccounts", true)]
     public async Task ExecuteAsync_HandlesOptionalParametersCorrectly(string partialArgs, bool shouldSucceed)
     {
         // Arrange
         var args = $"--subscription {_knownSubscription} {partialArgs}";
 
-        _monitorService.ListActivityLogs(
+        _monitorService.ListActivityLogsPaged(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -243,10 +251,11 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
             Arg.Any<string>(),
+            Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(new List<ActivityLogEventData>
-            {
+            .Returns(new ActivityLogPagedResult(
+            [
                 new()
                 {
                     Description = "Test activity log",
@@ -256,7 +265,7 @@ public sealed class ActivityLogListCommandTests
                     EventTimestamp = "2023-01-01T00:00:00Z",
                     Properties = new Dictionary<string, object>()
                 }
-            });
+            ], null));
 
         // Act
         var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse(args), TestContext.Current.CancellationToken);

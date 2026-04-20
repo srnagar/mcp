@@ -8,18 +8,22 @@ namespace Microsoft.Mcp.Core.Services.Pagination;
 /// <summary>
 /// Manages opaque pagination cursors that map to backend-specific continuation state.
 /// Cursors are scoped to a session and validated against the originating tool and request parameters.
+/// Cursor IDs are deterministic: the same request parameters and continuation state always produce
+/// the same cursor ID, making paginated requests naturally idempotent.
 /// </summary>
 public interface IPaginationCursorRegistry
 {
     /// <summary>
-    /// Creates a new pagination cursor and stores the continuation state.
+    /// Creates a new pagination cursor and stores the continuation state. The cursor ID is
+    /// deterministically computed from the request hash and continuation state, so calling
+    /// this method with the same inputs always returns the same cursor ID (idempotent).
     /// </summary>
     /// <param name="toolName">The name of the tool creating the cursor.</param>
     /// <param name="sessionId">The session or user identity that owns the cursor.</param>
     /// <param name="requestHash">Hash of the request parameters (excluding nextCursor).</param>
     /// <param name="continuationState">Backend-specific state for fetching the next page.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>An opaque cursor ID string.</returns>
+    /// <returns>A deterministic, opaque cursor ID string.</returns>
     ValueTask<string> CreateAsync(
         string toolName,
         string sessionId,
@@ -45,20 +49,7 @@ public interface IPaginationCursorRegistry
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the continuation state of an existing cursor. Used when a page is fetched
-    /// and the backend provides new continuation state for the next page.
-    /// </summary>
-    /// <param name="cursorId">The cursor ID to update.</param>
-    /// <param name="continuationState">The new continuation state.</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns><see langword="true"/> if the cursor was found and updated; otherwise <see langword="false"/>.</returns>
-    ValueTask<bool> UpdateAsync(
-        string cursorId,
-        Dictionary<string, string> continuationState,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Deletes a pagination cursor. Called when the last page has been reached.
+    /// Deletes a pagination cursor.
     /// </summary>
     /// <param name="cursorId">The cursor ID to delete.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>

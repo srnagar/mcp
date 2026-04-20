@@ -112,20 +112,8 @@ public sealed class RegistryListCommand(
                     ["offset"] = registries.NextOffset.ToString()
                 };
 
-                if (options.NextCursor is not null)
-                {
-                    await _cursorRegistry.UpdateAsync(options.NextCursor, continuationState, cancellationToken);
-                    nextCursor = options.NextCursor;
-                }
-                else
-                {
-                    nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
-                }
-            }
-            else if (options.NextCursor is not null)
-            {
-                await _cursorRegistry.DeleteAsync(options.NextCursor, cancellationToken);
+                nextCursor = await _cursorRegistry.CreateAsync(
+                    toolName, sessionId, requestHash, continuationState, cancellationToken);
             }
 
             var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);

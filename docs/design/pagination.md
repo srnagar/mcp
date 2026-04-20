@@ -58,22 +58,35 @@ sequenceDiagram
     Server->>Azure: Fetch first page (pageSize items)
     Azure-->>Server: Page 1 results + continuation state
     Server->>Cache: CreateAsync(toolName, sessionId, requestHash, continuationState)
-    Cache-->>Server: cursorId = "c_abc123def"
-    Server-->>Client: { items: [...], pagination: { nextCursor: "c_abc123def", pageSize: 50 } }
+    Note over Cache: cursorId = hash(requestHash + continuationState)
+    Cache-->>Server: cursorId = "c_a1b2c3d4..."
+    Server-->>Client: { items: [...], pagination: { nextCursor: "c_a1b2c3d4...", pageSize: 50 } }
 
-    Note over Client,Azure: Subsequent Page Request
-    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: "c_abc123def" })
+    Note over Client,Azure: Page 2 Request
+    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: "c_a1b2c3d4..." })
     Server->>Cache: GetAsync(cursorId, toolName, sessionId, requestHash)
     Cache-->>Server: continuationState (nextLink, offset, etc.)
     Server->>Azure: Fetch next page using continuation state
     Azure-->>Server: Page 2 results + new continuation state (or end)
     alt More pages available
-        Server->>Cache: UpdateAsync(cursorId, newContinuationState)
-        Server-->>Client: { items: [...], pagination: { nextCursor: "c_abc123def", pageSize: 50 } }
+        Server->>Cache: CreateAsync(toolName, sessionId, requestHash, newContinuationState)
+        Note over Cache: New deterministic cursorId from new state
+        Cache-->>Server: cursorId = "c_e5f6g7h8..."
+        Server-->>Client: { items: [...], pagination: { nextCursor: "c_e5f6g7h8...", pageSize: 50 } }
     else No more pages
-        Server->>Cache: DeleteAsync(cursorId)
         Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
     end
+
+    Note over Client,Azure: Retry of Page 2 (idempotent — same cursor, same result)
+    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: "c_a1b2c3d4..." })
+    Server->>Cache: GetAsync("c_a1b2c3d4...", ...)
+    Cache-->>Server: Same continuationState as before
+    Server->>Azure: Fetch next page (same continuation state → same results)
+    Azure-->>Server: Page 2 results + same new continuation state
+    Server->>Cache: CreateAsync(..., sameContinuationState)
+    Note over Cache: Same inputs → same deterministic cursorId "c_e5f6g7h8..."
+    Cache-->>Server: cursorId = "c_e5f6g7h8..."
+    Server-->>Client: { items: [...], pagination: { nextCursor: "c_e5f6g7h8...", pageSize: 50 } }
 ```
 
 ## Cursor Registry Flow
@@ -84,7 +97,7 @@ flowchart TD
     B -->|No| C[Call Azure service<br/>for first page]
     C --> D[Get results +<br/>continuation state]
     D --> E{More results<br/>available?}
-    E -->|Yes| F[CursorRegistry.CreateAsync<br/>stores: toolName, sessionId,<br/>requestHash, continuationState]
+    E -->|Yes| F[CursorRegistry.CreateAsync<br/>deterministic ID from<br/>requestHash + continuationState]
     F --> G[Return results +<br/>pagination.nextCursor]
     E -->|No| H[Return results +<br/>pagination.nextCursor = null]
 
@@ -93,10 +106,8 @@ flowchart TD
     J --> K[Call Azure service<br/>with continuation state]
     K --> L[Get results +<br/>new continuation state]
     L --> M{More results?}
-    M -->|Yes| N[CursorRegistry.UpdateAsync<br/>new continuation state]
-    N --> G
-    M -->|No| O[CursorRegistry.DeleteAsync<br/>remove cursor]
-    O --> H
+    M -->|Yes| F
+    M -->|No| H
 
     I -->|Invalid/Expired| P[Return 400 error:<br/>invalid or expired cursor]
 ```

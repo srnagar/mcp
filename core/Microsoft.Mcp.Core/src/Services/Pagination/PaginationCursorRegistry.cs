@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Mcp.Core.Services.Caching;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,6 +13,8 @@ namespace Microsoft.Mcp.Core.Services.Pagination;
 /// <summary>
 /// In-memory implementation of <see cref="IPaginationCursorRegistry"/> backed by <see cref="ICacheService"/>.
 /// Uses the "pagination" cache group to isolate cursor entries from other cached data.
+/// Cursor IDs are deterministic: computed from the request hash and continuation state,
+/// making paginated requests naturally idempotent.
 /// </summary>
 public sealed class PaginationCursorRegistry(
     ICacheService cacheService,
@@ -31,7 +35,7 @@ public sealed class PaginationCursorRegistry(
         Dictionary<string, string> continuationState,
         CancellationToken cancellationToken = default)
     {
-        var cursorId = GenerateCursorId();
+        var cursorId = GenerateCursorId(requestHash, continuationState);
 
         var entry = new PaginationCursorEntry
         {
@@ -103,36 +107,6 @@ public sealed class PaginationCursorRegistry(
         return entry;
     }
 
-    public async ValueTask<bool> UpdateAsync(
-        string cursorId,
-        Dictionary<string, string> continuationState,
-        CancellationToken cancellationToken = default)
-    {
-        var entry = await _cacheService.GetAsync<PaginationCursorEntry>(
-            CacheGroup,
-            cursorId,
-            _options.CursorTimeToLive,
-            cancellationToken);
-
-        if (entry is null)
-        {
-            _logger.LogDebug("Cannot update pagination cursor {CursorId}: not found or expired.", cursorId);
-            return false;
-        }
-
-        entry.ContinuationState = continuationState;
-
-        await _cacheService.SetAsync(
-            CacheGroup,
-            cursorId,
-            entry,
-            _options.CursorTimeToLive,
-            cancellationToken);
-
-        _logger.LogDebug("Updated pagination cursor {CursorId} with new continuation state.", cursorId);
-        return true;
-    }
-
     public async ValueTask<bool> DeleteAsync(
         string cursorId,
         CancellationToken cancellationToken = default)
@@ -180,6 +154,21 @@ public sealed class PaginationCursorRegistry(
         _logger.LogDebug("Cleared all pagination cursors.");
     }
 
-    private static string GenerateCursorId() =>
-        $"{CursorPrefix}{Guid.NewGuid():N}";
+    internal static string GenerateCursorId(string requestHash, Dictionary<string, string> continuationState)
+    {
+        var sb = new StringBuilder();
+        sb.Append(requestHash);
+        sb.Append('|');
+
+        foreach (var kvp in continuationState.OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            sb.Append(kvp.Key);
+            sb.Append('=');
+            sb.Append(kvp.Value);
+            sb.Append('&');
+        }
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return $"{CursorPrefix}{Convert.ToHexStringLower(bytes)[..32]}";
+    }
 }

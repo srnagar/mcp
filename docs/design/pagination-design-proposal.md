@@ -99,22 +99,25 @@ graph TB
     end
 
     VS -->|"tools/call { nextCursor? }"| TC
-    TC -->|"Create / Get / Update / Delete"| PCR
+    TC -->|"1. GetAsync(cursorId)<br/>retrieve continuation state"| PCR
     PCR --> MEM
     PCR -.-> DIST
-    TC -->|"Fetch one page"| SVC
+    TC -->|"2. Fetch page using<br/>continuation state"| SVC
     SVC --> ARG
     SVC --> ARM
     SVC --> DP
     SVC --> REST
+    SVC -->|"3. Results + new<br/>continuation state"| TC
+    TC -->|"4. CreateAsync(requestHash,<br/>newContinuationState)"| PCR
+    TC -->|"5. Results + nextCursor"| VS
 ```
 
 ### Component responsibilities
 
 | Component | Responsibility |
 |---|---|
-| **Tool Command** | Accepts `nextCursor`, computes request hash, calls service for one page, interacts with cursor registry |
-| **PaginationCursorRegistry** | Creates, retrieves, updates, and deletes cursor entries. Validates ownership and parameter consistency. |
+| **Tool Command** | Accepts `nextCursor`, computes request hash, resolves cursor via registry, calls service for one page, stores new cursor if more pages exist |
+| **PaginationCursorRegistry** | Creates and retrieves cursor entries (deterministic IDs). Validates tool name, session, and request-hash consistency on retrieval. |
 | **ICacheService** | Stores cursor entries with TTL. Abstraction layer that allows swapping in-memory for distributed cache. |
 | **Azure Service Layer** | Fetches one page of results using backend-specific pagination (offset, continuation token, nextLink, etc.) |
 

@@ -194,23 +194,26 @@ Paginated tools append the following to their description:
 
 ```mermaid
 flowchart TD
-    A["Tool ExecuteAsync"] -->|Receives request| B{"nextCursor<br/>provided?"}
-    B -->|No| C["Call Azure service<br/>for first page"]
-    C --> D["Get results +<br/>continuation state"]
-    D --> E{"More results<br/>available?"}
-    E -->|Yes| F["CursorRegistry.CreateAsync<br/>deterministic ID from<br/>requestHash + continuationState"]
-    F --> G["Return results +<br/>pagination.nextCursor"]
-    E -->|No| H["Return results +<br/>pagination.nextCursor = null"]
+    A["Tool ExecuteAsync"] -->|Receives request| B["ComputeRequestHash from args"]
+    B --> C{"nextCursor<br/>provided?"}
+    C -->|No| D["ResolveCursorAsync returns null"]
+    D --> E["Call Azure service<br/>skip=0, limit=pageSize"]
 
-    B -->|Yes| I["CursorRegistry.GetAsync<br/>validates: toolName, sessionId,<br/>requestHash match"]
-    I -->|Valid| J["Extract continuation state<br/>nextLink / offset / skip / etc."]
-    J --> K["Call Azure service<br/>with continuation state"]
-    K --> L["Get results +<br/>new continuation state"]
-    L --> M{"More results?"}
-    M -->|Yes| F
-    M -->|No| H
+    C -->|Yes| F["ResolveCursorAsync calls<br/>CursorRegistry.GetAsync<br/>validates: toolName, sessionId,<br/>requestHash match"]
+    F -->|Valid| G["Extract continuation state<br/>from cursor entry"]
+    G --> H["Call Azure service<br/>using continuation state"]
 
-    I -->|"Invalid / Expired"| P["Return 400 error:<br/>invalid or expired cursor"]
+    F -->|"Invalid / Expired"| P["Throw ArgumentException:<br/>invalid or expired cursor"]
+
+    E --> I["Get results from Azure"]
+    H --> I
+
+    I --> J{"More results<br/>available?"}
+    J -->|Yes| K["Construct continuationState<br/>from Azure response"]
+    K --> L["CursorRegistry.CreateAsync<br/>deterministic ID from<br/>requestHash + continuationState"]
+    L --> M["Return results +<br/>pagination.nextCursor"]
+
+    J -->|No| N["Return results +<br/>pagination.nextCursor = null"]
 ```
 
 ### Cursor creation (first page)
@@ -315,38 +318,37 @@ sequenceDiagram
 
     Note over Client,Azure: First Page Request (nextCursor = null)
     Client->>Server: CallTool(args: { subscription, nextCursor: null })
-    Server->>Azure: Fetch first page (pageSize items)
-    Azure-->>Server: Page 1 results + continuation state
-    Server->>Registry: CreateAsync(toolName, sessionId, requestHash, state)
-    Note over Registry: cursorId = hash(requestHash + state)
-    Registry-->>Server: cursorId = "c_a1b2c3d4..."
-    Server-->>Client: { items: [...], pagination: { nextCursor: "c_a1b2c3d4...", pageSize: 50 } }
-
-    Note over Client,Azure: Page 2 Request
-    Client->>Server: CallTool(args: { subscription, nextCursor: "c_a1b2c3d4..." })
-    Server->>Registry: GetAsync(cursorId, toolName, sessionId, requestHash)
-    Registry-->>Server: continuationState (offset, token, etc.)
-    Server->>Azure: Fetch next page using continuation state
-    Azure-->>Server: Page 2 results + new continuation state (or end)
+    Server->>Server: ComputeRequestHash(args)
+    Server->>Server: ResolveCursorAsync(null) → no cursor entry
+    Server->>Azure: Fetch page (pageSize items, skip=0)
+    Azure-->>Server: Page 1 results (truncated flag or continuation token)
     alt More pages available
-        Server->>Registry: CreateAsync(toolName, sessionId, requestHash, newState)
+        Server->>Server: Construct continuationState from response
+        Server->>Registry: CreateAsync(toolName, sessionId, requestHash, continuationState)
+        Note over Registry: cursorId = hash(requestHash + continuationState)
+        Registry-->>Server: cursorId = "c_a1b2c3d4..."
+        Server-->>Client: { items: [...], pagination: { nextCursor: "c_a1b2c3d4...", pageSize: 50 } }
+    else No more pages
+        Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
+    end
+
+    Note over Client,Azure: Subsequent Page Request
+    Client->>Server: CallTool(args: { subscription, nextCursor: "c_a1b2c3d4..." })
+    Server->>Server: ComputeRequestHash(args)
+    Server->>Registry: ResolveCursorAsync → GetAsync("c_a1b2c3d4...", toolName, sessionId, requestHash)
+    Registry-->>Server: PaginationCursorEntry (validated)
+    Server->>Server: Extract continuation state from entry
+    Server->>Azure: Fetch page using continuation state
+    Azure-->>Server: Page N results (truncated flag or continuation token)
+    alt More pages available
+        Server->>Server: Construct new continuationState from response
+        Server->>Registry: CreateAsync(toolName, sessionId, requestHash, newContinuationState)
         Note over Registry: New deterministic cursorId from new state
         Registry-->>Server: cursorId = "c_e5f6g7h8..."
         Server-->>Client: { items: [...], pagination: { nextCursor: "c_e5f6g7h8...", pageSize: 50 } }
     else No more pages
         Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
     end
-
-    Note over Client,Azure: Retry of Page 2 (idempotent)
-    Client->>Server: CallTool(args: { subscription, nextCursor: "c_a1b2c3d4..." })
-    Server->>Registry: GetAsync("c_a1b2c3d4...", ...)
-    Registry-->>Server: Same continuationState (cursor never mutated)
-    Server->>Azure: Fetch next page (same state → same results)
-    Azure-->>Server: Page 2 results + same new continuation state
-    Server->>Registry: CreateAsync(..., sameNewState)
-    Note over Registry: Same inputs → same cursor ID "c_e5f6g7h8..."
-    Registry-->>Server: cursorId = "c_e5f6g7h8..."
-    Server-->>Client: { items: [...], pagination: { nextCursor: "c_e5f6g7h8...", pageSize: 50 } }
 ```
 
 ---

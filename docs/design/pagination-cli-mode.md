@@ -25,7 +25,7 @@ Each invocation follows this lifecycle:
 │  azmcp.exe acr registry list --subscription my-sub           │
 │                                                              │
 │  1. Process starts                                           │
-│  2. ServiceCollection built (IMemoryCache, CursorRegistry)   │
+│  2. ServiceCollection built (PaginationCursorCache, Registry)  │
 │  3. Command parsed via System.CommandLine                    │
 │  4. ExecuteAsync() runs: fetches page 1, creates cursor      │
 │  5. JSON response written to stdout                          │
@@ -41,18 +41,18 @@ Each invocation follows this lifecycle:
 
 ### The fundamental problem
 
-The pagination design stores cursor state in `SingleUserCliCacheService`, which is backed by `IMemoryCache` — an in-process, in-memory cache. When the `azmcp.exe` process exits after printing its response, the entire `IMemoryCache` (including all pagination cursors) is destroyed.
+The pagination design stores cursor state in `PaginationCursorCache`, which is a `ConcurrentDictionary`-based in-memory cache. When the `azmcp.exe` process exits after printing its response, the entire cache (including all pagination cursors) is destroyed.
 
 ```
 Invocation 1:
   azmcp.exe acr registry list --subscription my-sub
   → Returns: { pagination: { nextCursor: "c_abc123", pageSize: 5 } }
-  → Cursor "c_abc123" stored in IMemoryCache
-  → Process exits → IMemoryCache destroyed → cursor gone forever
+  → Cursor "c_abc123" stored in PaginationCursorCache
+  → Process exits → cache destroyed → cursor gone forever
 
 Invocation 2:
   azmcp.exe acr registry list --subscription my-sub --next-cursor c_abc123
-  → New process starts → fresh IMemoryCache (empty)
+  → New process starts → fresh PaginationCursorCache (empty)
   → CursorRegistry.GetAsync("c_abc123") → returns null (not found)
   → Throws ArgumentException: "The pagination cursor is invalid, expired..."
   → Returns 400 error
@@ -62,7 +62,7 @@ Invocation 2:
 
 | Step | What happens | Works? |
 |---|---|---|
-| First page request (no cursor) | Tool fetches page 1, stores cursor in IMemoryCache, returns `nextCursor` | ✅ Response is valid |
+| First page request (no cursor) | Tool fetches page 1, stores cursor in PaginationCursorCache, returns `nextCursor` | ✅ Response is valid |
 | Next page request (with cursor) | New process starts, cursor registry is empty, lookup fails | ❌ **Always fails** |
 
 The cursor value returned in the first response is **meaningless** — it refers to state that no longer exists anywhere.
@@ -103,13 +103,13 @@ The pagination design was built for **MCP server mode**, where the server runs a
 | Aspect | Direct CLI mode (`azmcp.exe <cmd>`) | MCP Server mode (stdio transport) |
 |---|---|---|
 | **Process lifetime** | Seconds (one-shot) | Hours (persistent child process) |
-| **IMemoryCache lifetime** | Per-invocation (destroyed on exit) | Per-session (lives until client disconnects) |
+| **Cache lifetime** | Per-invocation (destroyed on exit) | Per-session (lives until client disconnects) |
 | **Cursor persistence** | ❌ Impossible | ✅ Works (same process across calls) |
 | **Who calls the tool** | Human user in terminal | LLM agent via JSON-RPC |
 | **Multi-call coordination** | Manual (user types next command) | Automatic (agent holds cursor in context) |
 | **Use case** | Quick lookups, scripting, debugging | Interactive AI-assisted workflows |
 
-In MCP server mode, the server process stays alive between `tools/call` requests. The `IMemoryCache` and `PaginationCursorRegistry` persist in memory, so cursors created on page 1 are available when the agent requests page 2. This is the scenario pagination was designed for.
+In MCP server mode, the server process stays alive between `tools/call` requests. The `PaginationCursorCache` and `PaginationCursorRegistry` persist in memory, so cursors created on page 1 are available when the agent requests page 2. This is the scenario pagination was designed for.
 
 ---
 
@@ -119,7 +119,7 @@ If pagination support in direct CLI mode is desired in the future, these approac
 
 ### Option 1: File-based cursor persistence
 
-Write cursor state to a temporary file (e.g., `~/.azmcp/cursors/<cursor-id>.json`) instead of or in addition to IMemoryCache. Each process invocation reads/writes from disk.
+Write cursor state to a temporary file (e.g., `~/.azmcp/cursors/<cursor-id>.json`) instead of the in-memory cache. Each process invocation reads/writes from disk.
 
 **Pros:** Simple, no infrastructure, works across process invocations.
 **Cons:** File cleanup complexity, potential stale data on disk, security of cursor files.

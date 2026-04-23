@@ -63,7 +63,7 @@ Azure service backends use diverse pagination mechanisms — KQL offsets (Resour
 
 4. **Safe by default.** Cursors are session-scoped, request-hash-validated, and TTL-expired. A cursor issued for one user/tool/query cannot be reused for a different user/tool/query.
 
-5. **Progressive caching strategy.** Start with in-memory caching for the early preview (stdio-only, single-user). Add distributed caching (Redis/HybridCache) for HTTP multi-server deployments without changing the tool or client contract.
+5. **Dedicated in-memory cache.** Pagination cursors are stored in a purpose-built `PaginationCursorCache` backed by `ConcurrentDictionary` with absolute TTL expiration. This cache is completely independent of other caching concerns (e.g., subscription/tenant caching).
 
 6. **Incremental rollout.** Pagination can be enabled per-tool without modifying other tools. Tools opt in by setting `SupportsPagination = true` in their metadata.
 
@@ -82,12 +82,7 @@ graph TB
     subgraph Server["MCP Server"]
         TC["Tool Command<br/>(e.g., AcrRegistryListCommand)"]
         PCR["PaginationCursorRegistry"]
-
-        subgraph Cache["ICacheService"]
-            MEM["SingleUserCliCacheService"]
-            DIST["Distributed Cache — future"]
-        end
-
+        PCC["PaginationCursorCache<br/>(ConcurrentDictionary + TTL)"]
         SVC["Azure Service Layer"]
     end
 
@@ -99,8 +94,7 @@ graph TB
 
     VS -->|"1. tools/call { nextCursor? }"| TC
     TC -->|"2. GetAsync(cursorId)"| PCR
-    PCR --> MEM
-    PCR -.-> DIST
+    PCR --> PCC
     TC -->|"3. Fetch page"| SVC
     SVC --> ARG & ARM & DP
     SVC -->|"4. Results + continuation"| TC
@@ -114,7 +108,7 @@ graph TB
 |---|---|
 | **Tool Command** | Accepts `nextCursor`, computes request hash, resolves cursor via registry, calls service for one page, stores new cursor if more pages exist |
 | **PaginationCursorRegistry** | Creates and retrieves cursor entries (deterministic IDs). Validates tool name, session, and request-hash consistency on retrieval. |
-| **ICacheService** | Stores cursor entries with TTL. Abstraction layer that allows swapping in-memory for distributed cache. |
+| **PaginationCursorCache** | Dedicated in-memory store for pagination cursor entries. Uses `ConcurrentDictionary` with absolute TTL expiration. |
 | **Azure Service Layer** | Fetches one page of results using backend-specific pagination (offset, continuation token, nextLink, etc.) |
 
 ---
@@ -236,7 +230,7 @@ When a tool receives a request without `nextCursor` (or with `nextCursor = null`
 
 ### Cursor storage
 
-Each cursor entry is stored in the `ICacheService` under the `"pagination"` cache group with the following structure:
+Each cursor entry is stored in the `PaginationCursorCache` with the following structure:
 
 ```csharp
 public sealed class PaginationCursorEntry
@@ -298,7 +292,7 @@ When a tool receives a request with a non-null `nextCursor`:
 
 Cursors are evicted in three ways:
 
-1. **Natural TTL expiry.** The `ICacheService` automatically evicts entries after `CursorTimeToLive` (default 2 hours). This handles abandoned cursors (e.g., the user stopped paging) and consumed cursors that are no longer needed for retries.
+1. **Natural TTL expiry.** The `PaginationCursorCache` automatically evicts entries after `CursorTimeToLive` (default 2 hours). This handles abandoned cursors (e.g., the user stopped paging) and consumed cursors that are no longer needed for retries.
 
 2. **Session cleanup.** When a session ends (e.g., stdio transport closes, HTTP session timeout), `ClearSessionAsync(sessionId)` removes all cursors for that session.
 
@@ -434,7 +428,7 @@ In HTTP mode, the MCP server runs as a shared service. Each request is authentic
 
 ### Credential caching interaction
 
-The existing `ICacheService` already caches `AuthenticatedClient` instances (TTL: 15 minutes) and tenant/subscription data. Pagination cursors use the same `ICacheService` but in an isolated cache group (`"pagination"`). There is no cross-contamination between credential cache entries and pagination cache entries.
+The existing `ICacheService` caches `AuthenticatedClient` instances (TTL: 15 minutes) and tenant/subscription data. Pagination cursors use a completely separate `PaginationCursorCache` instance with no shared state. There is no cross-contamination between credential cache entries and pagination cache entries.
 
 ---
 
@@ -450,69 +444,54 @@ Pagination cursors are inherently stateful — they map an opaque cursor ID to b
 
 3. **Multi-user isolation.** In HTTP mode, cursor state must be partitioned by user and validated on each access.
 
-### Phase 1 — In-memory cache (early preview)
+### In-memory cache — `PaginationCursorCache`
 
-For the initial preview release targeting stdio (single-user, single-process) scenarios:
+Pagination cursors are stored in a dedicated `PaginationCursorCache` — a `ConcurrentDictionary<string, CacheItem>` with absolute TTL expiration:
 
-- **Implementation:** `SingleUserCliCacheService` backed by `IMemoryCache`
-- **Lifetime:** Singleton, process-scoped
+- **Implementation:** `PaginationCursorCache` (registered as singleton)
+- **Backing store:** `ConcurrentDictionary` with per-entry `ExpiresAt` timestamp
 - **TTL:** 2 hours (configurable via `PaginationOptions.CursorTimeToLive`)
-- **Capacity:** Unbounded (practical limit: a few hundred cursors at most in CLI usage)
-- **Pros:** Zero infrastructure, zero latency, works out of the box
-- **Cons:** Lost on server restart, single-process only, not suitable for multi-server HTTP deployments
+- **Capacity:** Unbounded (practical limit: a few hundred cursors at most in typical usage)
+- **Thread-safe:** All operations are lock-free via `ConcurrentDictionary`
+- **Pros:** Zero infrastructure, zero latency, no external dependencies, works out of the box
+- **Cons:** Lost on server restart, single-process only
 
-This is the existing implementation and requires no changes to the caching layer.
+This is a purpose-built cache — it does not share storage with subscription, tenant, or resource group caching (`ICacheService`). This separation means:
 
-### Phase 2 — Distributed cache (HTTP multi-server)
-
-For production HTTP deployments with multiple server instances behind a load balancer:
-
-- **Implementation:** Replace `ICacheService` with a distributed implementation backed by Redis or `HybridCache`
-- **HybridCache advantages:** The codebase already uses `HybridCache` in `HybridCacheSessionStore` for session affinity in the `Microsoft.ModelContextProtocol.HttpServer.Distributed` package. This provides:
-  - L1 (in-memory) + L2 (Redis/SQL) two-tier caching
-  - Built-in stampede protection
-  - Automatic serialization/deserialization
-  - Tag-based invalidation
-- **Migration path:** Since all pagination code depends on `ICacheService` (not on `IMemoryCache` directly), swapping the implementation is a DI registration change — no tool code changes required.
-
-```csharp
-// Phase 1: stdio mode
-services.AddSingleUserCliCacheService(); // IMemoryCache-backed
-
-// Phase 2: HTTP mode with Redis
-services.AddSingleton<ICacheService, HybridCacheService>(); // Redis-backed
-```
+- Pagination cache behavior can evolve independently
+- Clearing cursors has no side effects on other cached data
+- No group-key overhead — entries are keyed directly by cursor ID
 
 ### Cache isolation
 
 ```mermaid
 graph LR
-    subgraph CacheGroups["ICacheService — Cache Groups"]
+    subgraph GeneralCache["ICacheService (general)"]
         direction TB
         G1["subscriptions<br/>TTL: 2 hr"]
         G2["tenants<br/>TTL: 12 hr"]
         G3["resourceGroups<br/>TTL: 5 min"]
-        G4["pagination<br/>TTL: 2 hr (configurable)"]
+    end
+
+    subgraph PaginationStore["PaginationCursorCache (dedicated)"]
+        direction TB
+        G4["cursor entries<br/>TTL: 2 hr (configurable)"]
     end
 
     SS["SubscriptionService"] --> G1
     TS["TenantService"] --> G2
     RGS["ResourceGroupService"] --> G3
     PCR2["PaginationCursorRegistry"] --> G4
-
-    G4 -->|"ClearGroupAsync"| X["Clear all cursors<br/>independently"]
 ```
 
-The pagination cache group (`"pagination"`) is fully isolated from other cache groups:
+The pagination cache is fully independent from the general `ICacheService`:
 
-| Cache group | Owner | TTL | Purpose |
-|---|---|---|---|
-| `subscriptions` | `SubscriptionService` | 2 hours | Subscription metadata |
-| `tenants` | `TenantService` | 12 hours | Tenant metadata |
-| `resourceGroups` | `ResourceGroupService` | 5 minutes | Resource group lists |
-| `pagination` | `PaginationCursorRegistry` | 2 hours (configurable) | Pagination cursors |
+| Store | Owner | Backing | TTL | Purpose |
+|---|---|---|---|---|
+| `ICacheService` | `SubscriptionService`, `TenantService`, `ResourceGroupService` | `IMemoryCache` | Varies | General metadata caching |
+| `PaginationCursorCache` | `PaginationCursorRegistry` | `ConcurrentDictionary` | 2 hours (configurable) | Pagination cursor entries |
 
-Calling `ClearGroupAsync("pagination")` removes all cursors without affecting subscription, tenant, or resource group caches.
+Calling `PaginationCursorCache.Clear()` removes all cursors without affecting subscription, tenant, or resource group caches.
 
 ### Note on `HttpServiceCacheService`
 
@@ -677,7 +656,7 @@ Individual tools may override `DefaultPageSize` based on the expected response s
 
 ### Phase 1 — Foundation (current)
 
-- [x] `ICacheService` abstraction with `SingleUserCliCacheService` (in-memory)
+- [x] `PaginationCursorCache` — dedicated in-memory cache for cursor entries
 - [x] `IPaginationCursorRegistry` interface and `PaginationCursorRegistry` implementation
 - [x] `PaginationCursorEntry` and `PaginationInfo` models
 - [x] `PaginationOptions` configuration
@@ -692,9 +671,7 @@ Individual tools may override `DefaultPageSize` based on the expected response s
 
 ### Phase 3 — HTTP mode support
 
-- [ ] Implement distributed `ICacheService` backed by `HybridCache` + Redis
 - [ ] Integrate session ID from HTTP authentication context
-- [ ] Replace `HttpServiceCacheService` no-op stub
 - [ ] Validate cursor security in multi-user scenarios
 
 ### Phase 4 — Full coverage
@@ -712,11 +689,7 @@ Individual tools may override `DefaultPageSize` based on the expected response s
 
 2. **Cursor in `_meta` vs inline.** The MCP spec discussion suggests `pagination` in the result block. Should Azure MCP also/instead use the `_meta` field on `CallToolResult` for `nextCursor`?
 
-3. **`HttpServiceCacheService` design.** What caching semantics are appropriate for multi-user HTTP mode? Per-request only (no cross-request caching), per-user (shared across requests by the same user), or global (shared across all users)?
-
-4. **Forward-only vs. bidirectional.** The current design is forward-only (no `previousCursor`). Should bidirectional pagination be supported? This would require storing additional state and is uncommon in MCP implementations.
-
-5. **Cursor serialization for AOT.** `PaginationCursorEntry` must be registered in a `JsonSerializerContext` for AOT compatibility if it's ever serialized to a distributed cache.
+3. **Forward-only vs. bidirectional.** The current design is forward-only (no `previousCursor`). Should bidirectional pagination be supported? This would require storing additional state and is uncommon in MCP implementations.
 
 ---
 

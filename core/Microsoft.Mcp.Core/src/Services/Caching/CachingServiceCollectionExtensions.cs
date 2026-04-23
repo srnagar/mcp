@@ -64,6 +64,7 @@ public static class CachingServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddPaginationServices(this IServiceCollection services)
     {
+        services.TryAddSingleton<PaginationCursorCache>();
         services.TryAddSingleton<IPaginationCursorRegistry, PaginationCursorRegistry>();
         services.AddOptions<PaginationOptions>()
             .BindConfiguration(PaginationOptions.SectionName);

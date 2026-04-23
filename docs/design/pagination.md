@@ -118,21 +118,23 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    subgraph ICacheService
+    subgraph GeneralCache["ICacheService (general)"]
         direction TB
-        G1[Group: subscriptions<br/>TTL: 10 min]
-        G2[Group: resourceGroups<br/>TTL: 24 hr]
-        G3[Group: pagination<br/>TTL: 2 hr configurable]
+        G1[subscriptions<br/>TTL: 10 min]
+        G2[resourceGroups<br/>TTL: 24 hr]
+    end
+
+    subgraph PaginationStore["PaginationCursorCache (dedicated)"]
+        direction TB
+        G3[cursor entries<br/>TTL: 2 hr configurable]
     end
 
     R[PaginationCursorRegistry] --> G3
     S[SubscriptionService] --> G1
     RG[ResourceGroupService] --> G2
-
-    G3 -->|ClearGroupAsync| X[Clear all cursors<br/>independently]
 ```
 
-The pagination cache group is fully isolated from other cache groups. Calling `ClearGroupAsync("pagination")` removes all cursors without affecting subscription or resource group caches.
+Pagination cursors are stored in a dedicated `PaginationCursorCache` backed by `ConcurrentDictionary` with absolute TTL expiration. This cache is fully independent of the general `ICacheService` used by subscription and resource group services.
 
 ## Cursor Entry Structure
 

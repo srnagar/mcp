@@ -3,7 +3,6 @@
 
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.Mcp.Core.Services.Caching;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Mcp.Core.Models.Pagination;
@@ -11,24 +10,22 @@ using Microsoft.Mcp.Core.Models.Pagination;
 namespace Microsoft.Mcp.Core.Services.Pagination;
 
 /// <summary>
-/// In-memory implementation of <see cref="IPaginationCursorRegistry"/> backed by <see cref="ICacheService"/>.
-/// Uses the "pagination" cache group to isolate cursor entries from other cached data.
+/// In-memory implementation of <see cref="IPaginationCursorRegistry"/> backed by <see cref="PaginationCursorCache"/>.
 /// Cursor IDs are deterministic: computed from the request hash and continuation state,
 /// making paginated requests naturally idempotent.
 /// </summary>
 public sealed class PaginationCursorRegistry(
-    ICacheService cacheService,
+    PaginationCursorCache cache,
     IOptions<PaginationOptions> options,
     ILogger<PaginationCursorRegistry> logger) : IPaginationCursorRegistry
 {
-    internal const string CacheGroup = "pagination";
     private const string CursorPrefix = "c_";
 
-    private readonly ICacheService _cacheService = cacheService;
+    private readonly PaginationCursorCache _cache = cache;
     private readonly PaginationOptions _options = options.Value;
     private readonly ILogger<PaginationCursorRegistry> _logger = logger;
 
-    public async ValueTask<string> CreateAsync(
+    public ValueTask<string> CreateAsync(
         string toolName,
         string sessionId,
         string requestHash,
@@ -46,37 +43,28 @@ public sealed class PaginationCursorRegistry(
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        await _cacheService.SetAsync(
-            CacheGroup,
-            cursorId,
-            entry,
-            _options.CursorTimeToLive,
-            cancellationToken);
+        _cache.Set(cursorId, entry, _options.CursorTimeToLive);
 
         _logger.LogDebug(
             "Created pagination cursor {CursorId} for tool {ToolName}, session {SessionId}.",
             cursorId, toolName, sessionId);
 
-        return cursorId;
+        return new ValueTask<string>(cursorId);
     }
 
-    public async ValueTask<PaginationCursorEntry?> GetAsync(
+    public ValueTask<PaginationCursorEntry?> GetAsync(
         string cursorId,
         string toolName,
         string sessionId,
         string requestHash,
         CancellationToken cancellationToken = default)
     {
-        var entry = await _cacheService.GetAsync<PaginationCursorEntry>(
-            CacheGroup,
-            cursorId,
-            _options.CursorTimeToLive,
-            cancellationToken);
+        var entry = _cache.Get(cursorId);
 
         if (entry is null)
         {
             _logger.LogDebug("Pagination cursor {CursorId} not found or expired.", cursorId);
-            return null;
+            return new ValueTask<PaginationCursorEntry?>(result: null);
         }
 
         if (!string.Equals(entry.ToolName, toolName, StringComparison.Ordinal))
@@ -84,7 +72,7 @@ public sealed class PaginationCursorRegistry(
             _logger.LogWarning(
                 "Pagination cursor {CursorId} tool mismatch: expected {ExpectedTool}, got {ActualTool}.",
                 cursorId, toolName, entry.ToolName);
-            return null;
+            return new ValueTask<PaginationCursorEntry?>(result: null);
         }
 
         // if (!string.Equals(entry.SessionId, sessionId, StringComparison.Ordinal))
@@ -101,57 +89,49 @@ public sealed class PaginationCursorRegistry(
                 "Pagination cursor {CursorId} request hash mismatch for tool {ToolName}. " +
                 "The request parameters may have changed between pages.",
                 cursorId, toolName);
-            return null;
+            return new ValueTask<PaginationCursorEntry?>(result: null);
         }
 
-        return entry;
+        return new ValueTask<PaginationCursorEntry?>(entry);
     }
 
-    public async ValueTask<bool> DeleteAsync(
+    public ValueTask<bool> DeleteAsync(
         string cursorId,
         CancellationToken cancellationToken = default)
     {
-        var entry = await _cacheService.GetAsync<PaginationCursorEntry>(
-            CacheGroup,
-            cursorId,
-            cancellationToken: cancellationToken);
+        var removed = _cache.Remove(cursorId);
 
-        if (entry is null)
+        if (removed)
         {
-            return false;
+            _logger.LogDebug("Deleted pagination cursor {CursorId}.", cursorId);
         }
 
-        await _cacheService.DeleteAsync(CacheGroup, cursorId, cancellationToken);
-        _logger.LogDebug("Deleted pagination cursor {CursorId}.", cursorId);
-        return true;
+        return new ValueTask<bool>(removed);
     }
 
-    public async ValueTask ClearSessionAsync(
+    public ValueTask ClearSessionAsync(
         string sessionId,
         CancellationToken cancellationToken = default)
     {
-        var keys = await _cacheService.GetGroupKeysAsync(CacheGroup, cancellationToken);
+        var entries = _cache.GetAll();
 
-        foreach (var key in keys)
+        foreach (var kvp in entries)
         {
-            var entry = await _cacheService.GetAsync<PaginationCursorEntry>(
-                CacheGroup,
-                key,
-                cancellationToken: cancellationToken);
-
-            if (entry is not null && string.Equals(entry.SessionId, sessionId, StringComparison.Ordinal))
+            if (string.Equals(kvp.Value.SessionId, sessionId, StringComparison.Ordinal))
             {
-                await _cacheService.DeleteAsync(CacheGroup, key, cancellationToken);
+                _cache.Remove(kvp.Key);
             }
         }
 
         _logger.LogDebug("Cleared all pagination cursors for session {SessionId}.", sessionId);
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask ClearAllAsync(CancellationToken cancellationToken = default)
+    public ValueTask ClearAllAsync(CancellationToken cancellationToken = default)
     {
-        await _cacheService.ClearGroupAsync(CacheGroup, cancellationToken);
+        _cache.Clear();
         _logger.LogDebug("Cleared all pagination cursors.");
+        return ValueTask.CompletedTask;
     }
 
     internal static string GenerateCursorId(string requestHash, Dictionary<string, string> continuationState)

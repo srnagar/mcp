@@ -76,40 +76,36 @@ Azure service backends use diverse pagination mechanisms — KQL offsets (Resour
 ```mermaid
 graph TB
     subgraph Client["MCP Client"]
-        VS["VS Code / Claude Code / Copilot CLI / Custom Agent"]
+        VS["VS Code / Claude Code /<br/>Copilot CLI / Custom Agent"]
     end
 
     subgraph Server["MCP Server"]
         TC["Tool Command<br/>(e.g., AcrRegistryListCommand)"]
-        PCR["PaginationCursorRegistry<br/>(IPaginationCursorRegistry)"]
+        PCR["PaginationCursorRegistry"]
 
-        subgraph Cache["ICacheService (group: pagination)"]
-            MEM["SingleUserCliCacheService<br/>(IMemoryCache)"]
-            DIST["Distributed Cache<br/>(HybridCache + Redis)<br/>— future"]
+        subgraph Cache["ICacheService"]
+            MEM["SingleUserCliCacheService"]
+            DIST["Distributed Cache — future"]
         end
 
-        SVC["Azure Service Layer<br/>(ARM SDK, Resource Graph,<br/>REST API, Data-plane SDK)"]
+        SVC["Azure Service Layer"]
     end
 
     subgraph Azure["Azure"]
         ARG["Resource Graph"]
         ARM["ARM APIs"]
         DP["Data-plane APIs"]
-        REST["REST APIs"]
     end
 
-    VS -->|"tools/call { nextCursor? }"| TC
-    TC -->|"1. GetAsync(cursorId)<br/>retrieve continuation state"| PCR
+    VS -->|"1. tools/call { nextCursor? }"| TC
+    TC -->|"2. GetAsync(cursorId)"| PCR
     PCR --> MEM
     PCR -.-> DIST
-    TC -->|"2. Fetch page using<br/>continuation state"| SVC
-    SVC --> ARG
-    SVC --> ARM
-    SVC --> DP
-    SVC --> REST
-    SVC -->|"3. Results + new<br/>continuation state"| TC
-    TC -->|"4. CreateAsync(requestHash,<br/>newContinuationState)"| PCR
-    TC -->|"5. Results + nextCursor"| VS
+    TC -->|"3. Fetch page"| SVC
+    SVC --> ARG & ARM & DP
+    SVC -->|"4. Results + continuation"| TC
+    TC -->|"5. CreateAsync(state)"| PCR
+    TC -->|"6. Results + nextCursor"| VS
 ```
 
 ### Component responsibilities

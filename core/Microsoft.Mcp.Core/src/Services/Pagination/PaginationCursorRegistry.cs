@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Mcp.Core.Models.Pagination;
@@ -11,16 +9,14 @@ namespace Microsoft.Mcp.Core.Services.Pagination;
 
 /// <summary>
 /// In-memory implementation of <see cref="IPaginationCursorRegistry"/> backed by <see cref="PaginationCursorCache"/>.
-/// Cursor IDs are deterministic: computed from the request hash and continuation state,
-/// making paginated requests naturally idempotent.
+/// Cursor IDs are opaque GUIDs. On retrieval, the registry validates that the tool name
+/// and request hash match the stored entry to prevent cross-tool or cross-query reuse.
 /// </summary>
 public sealed class PaginationCursorRegistry(
     PaginationCursorCache cache,
     IOptions<PaginationOptions> options,
     ILogger<PaginationCursorRegistry> logger) : IPaginationCursorRegistry
 {
-    private const string CursorPrefix = "c_";
-
     private readonly PaginationCursorCache _cache = cache;
     private readonly PaginationOptions _options = options.Value;
     private readonly ILogger<PaginationCursorRegistry> _logger = logger;
@@ -32,7 +28,7 @@ public sealed class PaginationCursorRegistry(
         Dictionary<string, string> continuationState,
         CancellationToken cancellationToken = default)
     {
-        var cursorId = GenerateCursorId(requestHash, continuationState);
+        var cursorId = Guid.NewGuid().ToString("N");
 
         var entry = new PaginationCursorEntry
         {
@@ -132,23 +128,5 @@ public sealed class PaginationCursorRegistry(
         _cache.Clear();
         _logger.LogDebug("Cleared all pagination cursors.");
         return ValueTask.CompletedTask;
-    }
-
-    internal static string GenerateCursorId(string requestHash, Dictionary<string, string> continuationState)
-    {
-        var sb = new StringBuilder();
-        sb.Append(requestHash);
-        sb.Append('|');
-
-        foreach (var kvp in continuationState.OrderBy(k => k.Key, StringComparer.Ordinal))
-        {
-            sb.Append(kvp.Key);
-            sb.Append('=');
-            sb.Append(kvp.Value);
-            sb.Append('&');
-        }
-
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
-        return $"{CursorPrefix}{Convert.ToHexStringLower(bytes)[..32]}";
     }
 }

@@ -23,5 +23,5 @@ public sealed class PaginationOptions
     /// Gets or sets the time-to-live for pagination cursor entries in the cache.
     /// Cursors that are not accessed within this duration are automatically evicted.
     /// </summary>
-    public TimeSpan CursorTimeToLive { get; set; } = TimeSpan.FromHours(2);
+    public TimeSpan CursorTimeToLive { get; set; } = TimeSpan.FromHours(1);
 }

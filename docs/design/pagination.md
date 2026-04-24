@@ -62,17 +62,18 @@ sequenceDiagram
     alt More pages available
         Server->>Server: Construct continuationState from response
         Server->>Cache: CreateAsync(toolName, sessionId, requestHash, continuationState)
-        Note over Cache: cursorId = hash(requestHash + continuationState)
-        Cache-->>Server: cursorId = "c_a1b2c3d4..."
-        Server-->>Client: { items: [...], pagination: { nextCursor: "c_a1b2c3d4...", pageSize: 50 } }
+        Note over Cache: cursorId = new GUID
+        Cache-->>Server: cursorId = "a1b2c3d4..."
+        Server-->>Client: { items: [...], pagination: { nextCursor: "a1b2c3d4...", pageSize: 50 } }
     else No more pages
         Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
     end
 
     Note over Client,Azure: Subsequent Page Request
-    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: "c_a1b2c3d4..." })
+    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: "a1b2c3d4..." })
     Server->>Server: ComputeRequestHash(args)
-    Server->>Cache: ResolveCursorAsync → GetAsync("c_a1b2c3d4...", toolName, sessionId, requestHash)
+    Server->>Cache: ResolveCursorAsync → GetAsync("a1b2c3d4...", toolName, sessionId, requestHash)
+    Note over Cache: Validates toolName + requestHash match stored entry
     Cache-->>Server: PaginationCursorEntry (validated)
     Server->>Server: Extract continuation state (offset, token, nextLink)
     Server->>Azure: Fetch page using continuation state
@@ -80,9 +81,9 @@ sequenceDiagram
     alt More pages available
         Server->>Server: Construct new continuationState from response
         Server->>Cache: CreateAsync(toolName, sessionId, requestHash, newContinuationState)
-        Note over Cache: New deterministic cursorId from new state
-        Cache-->>Server: cursorId = "c_e5f6g7h8..."
-        Server-->>Client: { items: [...], pagination: { nextCursor: "c_e5f6g7h8...", pageSize: 50 } }
+        Note over Cache: cursorId = new GUID
+        Cache-->>Server: cursorId = "e5f6g7h8..."
+        Server-->>Client: { items: [...], pagination: { nextCursor: "e5f6g7h8...", pageSize: 50 } }
     else No more pages
         Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
     end
@@ -108,7 +109,7 @@ flowchart TD
 
     I --> J{More results<br/>available?}
     J -->|Yes| K[Construct continuationState<br/>from Azure response]
-    K --> L[CursorRegistry.CreateAsync<br/>deterministic ID from<br/>requestHash + continuationState]
+    K --> L[CursorRegistry.CreateAsync<br/>generates opaque GUID cursor]
     L --> M[Return results +<br/>pagination.nextCursor]
 
     J -->|No| N[Return results +<br/>pagination.nextCursor = null]
@@ -126,7 +127,7 @@ flowchart LR
 
     subgraph PaginationStore["PaginationCursorCache (dedicated)"]
         direction TB
-        G3[cursor entries<br/>TTL: 2 hr configurable]
+        G3[cursor entries<br/>TTL: 1 hr configurable]
     end
 
     R[PaginationCursorRegistry] --> G3
@@ -144,7 +145,7 @@ Each cursor entry in the registry contains:
 |---|---|---|
 | `ToolName` | `string` | Tool that created the cursor (e.g., `azmcp_acr_registry_list`) |
 | `SessionId` | `string` | User/session scope for multi-user security |
-| `RequestHash` | `string` | SHA256 hash of request parameters (excluding `nextCursor`) to validate consistency |
+| `RequestHash` | `string` | SHA256 hash of request parameters (excluding `nextCursor`); validated on retrieval to ensure consistency |
 | `ContinuationState` | `Dictionary<string, string>` | Backend-specific state (e.g., `nextLink`, `offset`, `skipToken`) |
 | `CreatedAt` | `DateTimeOffset` | Timestamp for diagnostics |
 
@@ -183,7 +184,7 @@ Pagination behavior is configured via `PaginationOptions`:
 | Setting | Default | Description |
 |---|---|---|
 | `DefaultPageSize` | 50 | Number of items per page when tool doesn't specify its own |
-| `CursorTimeToLive` | 2 hours | How long a cursor remains valid in cache |
+| `CursorTimeToLive` | 1 hour | How long a cursor remains valid in cache |
 
 ## Security Considerations
 

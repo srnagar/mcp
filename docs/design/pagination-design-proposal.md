@@ -107,7 +107,7 @@ graph TB
 | Component | Responsibility |
 |---|---|
 | **Tool Command** | Accepts `nextCursor`, computes request hash, resolves cursor via registry, calls service for one page, stores new cursor if more pages exist |
-| **PaginationCursorRegistry** | Creates and retrieves cursor entries (deterministic IDs). Validates tool name, session, and request-hash consistency on retrieval. |
+| **PaginationCursorRegistry** | Creates and retrieves cursor entries (opaque GUID IDs). On retrieval, validates tool name, session, and request-hash consistency. |
 | **PaginationCursorCache** | Dedicated in-memory store for pagination cursor entries. Uses `ConcurrentDictionary` with absolute TTL expiration. |
 | **Azure Service Layer** | Fetches one page of results using backend-specific pagination (offset, continuation token, nextLink, etc.) |
 
@@ -203,7 +203,7 @@ flowchart TD
 
     I --> J{"More results<br/>available?"}
     J -->|Yes| K["Construct continuationState<br/>from Azure response"]
-    K --> L["CursorRegistry.CreateAsync<br/>deterministic ID from<br/>requestHash + continuationState"]
+    K --> L["CursorRegistry.CreateAsync<br/>generates opaque GUID cursor"]
     L --> M["Return results +<br/>pagination.nextCursor"]
 
     J -->|No| N["Return results +<br/>pagination.nextCursor = null"]
@@ -226,7 +226,7 @@ When a tool receives a request without `nextCursor` (or with `nextCursor = null`
        },
        cancellationToken);
    ```
-3. The cursor ID (e.g., `c_a1b2c3d4e5f6...`) is included in the response as `pagination.nextCursor`.
+3. The cursor ID (an opaque GUID like `a1b2c3d4e5f6...`) is included in the response as `pagination.nextCursor`.
 
 ### Cursor storage
 
@@ -245,33 +245,26 @@ public sealed class PaginationCursorEntry
 
 **Key design decisions:**
 
-- **Cursor ID format:** `c_<SHA256(requestHash + continuationState)[0:32]>` — deterministic, opaque, reveals no internal state. The same request + continuation state always produces the same cursor ID, enabling natural idempotency without additional state tracking.
-- **Request hash:** SHA256 of the canonical request parameters (sorted, serialized, excluding `nextCursor`). This ensures that a cursor cannot be reused with different query parameters.
+- **Cursor ID format:** Opaque GUID (`Guid.NewGuid().ToString("N")`) — reveals no internal state and is not guessable.
+- **Request hash validation:** SHA256 of the canonical request parameters (sorted, serialized, excluding `nextCursor`). Stored alongside the cursor and validated on retrieval to ensure a cursor cannot be reused with different query parameters.
 - **ContinuationState:** A generic `Dictionary<string, string>` that accommodates all Azure pagination backends:
   - Resource Graph: `{ "offset": "50" }`
   - ARM SDK: `{ "continuationToken": "<base64-token>" }`
   - REST API: `{ "nextLink": "https://management.azure.com/..." }`
   - Marketplace: `{ "skipToken": "<opaque-token>" }`
-- **TTL:** Configurable via `PaginationOptions.CursorTimeToLive` (default: 2 hours). The cursor is set with an absolute expiration in the cache.
+- **TTL:** Configurable via `PaginationOptions.CursorTimeToLive` (default: 1 hour). The cursor is set with an absolute expiration in the cache.
 
-### Deterministic cursor IDs and idempotent retries
+### Cursor retrieval and validation
 
-Cursor IDs are **deterministically computed** from the request hash and continuation state using SHA256:
+When a client presents a `nextCursor`, the registry retrieves the entry and validates:
 
-```
-cursorId = "c_" + SHA256(requestHash + "|" + sorted(continuationState))[0:32]
-```
+1. **Existence and TTL** — the cursor must exist in the cache and not be expired.
+2. **Tool name match** — the cursor must have been created by the same tool.
+3. **Request hash match** — the request parameters (excluding `nextCursor`) must hash to the same value as when the cursor was created. This prevents reusing a cursor from one query with different parameters.
 
-This design provides **natural idempotency**:
-- The same request parameters + same continuation state always produce the **same cursor ID**.
-- If a client retries a page request due to a client-side error, the server resolves the same cursor, fetches the same page from Azure, and computes the same next cursor ID.
-- No parent-child tracking or successor memoization is needed — the determinism is inherent in the ID generation.
+If any validation fails, the cursor is rejected and the client receives an error.
 
-Each page in a listing gets its own unique cursor ID because each page produces different continuation state. The previous page's cursor is **never mutated** — it remains a read-only pointer to the same continuation state, available for retries until TTL expiry.
-
-**Important caveats:**
-- Idempotency applies to the *continuation state*, not the underlying data. For offset-based backends (Resource Graph), the same offset may return different results if resources are added or removed between retries.
-- For token-based backends (ARM SDK continuation tokens, REST `nextLink`), the backend itself typically guarantees stable pagination.
+Each page in a listing gets its own unique cursor ID because each `CreateAsync` call generates a new GUID. The previous page's cursor remains in the cache until TTL expiry, preserving the continuation state it points to.
 
 ### Cursor retrieval (subsequent pages)
 
@@ -285,14 +278,14 @@ When a tool receives a request with a non-null `nextCursor`:
    - **Session match:** The stored `SessionId` matches the current session (prevents cross-user reuse in HTTP mode).
    - **Request hash match:** The stored `RequestHash` matches the computed hash (prevents parameter tampering between pages).
 4. If validation passes, the `ContinuationState` is extracted and used to fetch the next page from Azure.
-5. If the service returns more results, a new cursor is created via `_cursorRegistry.CreateAsync()` with the new continuation state. Because cursor IDs are deterministic, retrying the same page always produces the same next cursor ID.
-6. If this is the last page, no cursor is created and the response includes `nextCursor: null`. The consumed cursor remains in cache until TTL expiry to support retries.
+5. If the service returns more results, a new cursor is created via `_cursorRegistry.CreateAsync()` with the new continuation state.
+6. If this is the last page, no cursor is created and the response includes `nextCursor: null`. The consumed cursor remains in cache until TTL expiry.
 
 ### Cursor eviction
 
 Cursors are evicted in three ways:
 
-1. **Natural TTL expiry.** The `PaginationCursorCache` automatically evicts entries after `CursorTimeToLive` (default 2 hours). This handles abandoned cursors (e.g., the user stopped paging) and consumed cursors that are no longer needed for retries.
+1. **Natural TTL expiry.** The `PaginationCursorCache` automatically evicts entries after `CursorTimeToLive` (default 1 hour). This handles abandoned cursors (e.g., the user stopped paging) and consumed cursors that are no longer needed for retries.
 
 2. **Session cleanup.** When a session ends (e.g., stdio transport closes, HTTP session timeout), `ClearSessionAsync(sessionId)` removes all cursors for that session.
 
@@ -318,17 +311,18 @@ sequenceDiagram
     alt More pages available
         Server->>Server: Construct continuationState from response
         Server->>Registry: CreateAsync(toolName, sessionId, requestHash, continuationState)
-        Note over Registry: cursorId = hash(requestHash + continuationState)
-        Registry-->>Server: cursorId = "c_a1b2c3d4..."
-        Server-->>Client: { items: [...], pagination: { nextCursor: "c_a1b2c3d4...", pageSize: 50 } }
+        Note over Registry: cursorId = new GUID
+        Registry-->>Server: cursorId = "a1b2c3d4..."
+        Server-->>Client: { items: [...], pagination: { nextCursor: "a1b2c3d4...", pageSize: 50 } }
     else No more pages
         Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
     end
 
     Note over Client,Azure: Subsequent Page Request
-    Client->>Server: CallTool(args: { subscription, nextCursor: "c_a1b2c3d4..." })
+    Client->>Server: CallTool(args: { subscription, nextCursor: "a1b2c3d4..." })
     Server->>Server: ComputeRequestHash(args)
-    Server->>Registry: ResolveCursorAsync → GetAsync("c_a1b2c3d4...", toolName, sessionId, requestHash)
+    Server->>Registry: ResolveCursorAsync → GetAsync("a1b2c3d4...", toolName, sessionId, requestHash)
+    Note over Registry: Validates toolName + requestHash match stored entry
     Registry-->>Server: PaginationCursorEntry (validated)
     Server->>Server: Extract continuation state from entry
     Server->>Azure: Fetch page using continuation state
@@ -336,9 +330,9 @@ sequenceDiagram
     alt More pages available
         Server->>Server: Construct new continuationState from response
         Server->>Registry: CreateAsync(toolName, sessionId, requestHash, newContinuationState)
-        Note over Registry: New deterministic cursorId from new state
-        Registry-->>Server: cursorId = "c_e5f6g7h8..."
-        Server-->>Client: { items: [...], pagination: { nextCursor: "c_e5f6g7h8...", pageSize: 50 } }
+        Note over Registry: cursorId = new GUID
+        Registry-->>Server: cursorId = "e5f6g7h8..."
+        Server-->>Client: { items: [...], pagination: { nextCursor: "e5f6g7h8...", pageSize: 50 } }
     else No more pages
         Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
     end
@@ -398,7 +392,7 @@ The tool description includes the instruction "Always confirm with the user befo
 
 ### Multi-step workflows
 
-Cursors are valid for the configured TTL (default 2 hours), allowing the user to:
+Cursors are valid for the configured TTL (default 1 hour), allowing the user to:
 - Fetch page 1, ask follow-up questions about the results, then fetch page 2
 - Switch to a different tool, come back, and continue paging
 - Close and reopen the conversation within the TTL window (stdio only — the server process must remain running)
@@ -468,14 +462,14 @@ This is a purpose-built cache — it does not share storage with subscription, t
 graph LR
     subgraph GeneralCache["ICacheService (general)"]
         direction TB
-        G1["subscriptions<br/>TTL: 2 hr"]
+        G1["subscriptions<br/>TTL: 1 hr"]
         G2["tenants<br/>TTL: 12 hr"]
         G3["resourceGroups<br/>TTL: 5 min"]
     end
 
     subgraph PaginationStore["PaginationCursorCache (dedicated)"]
         direction TB
-        G4["cursor entries<br/>TTL: 2 hr (configurable)"]
+        G4["cursor entries<br/>TTL: 1 hr (configurable)"]
     end
 
     SS["SubscriptionService"] --> G1
@@ -489,7 +483,7 @@ The pagination cache is fully independent from the general `ICacheService`:
 | Store | Owner | Backing | TTL | Purpose |
 |---|---|---|---|---|
 | `ICacheService` | `SubscriptionService`, `TenantService`, `ResourceGroupService` | `IMemoryCache` | Varies | General metadata caching |
-| `PaginationCursorCache` | `PaginationCursorRegistry` | `ConcurrentDictionary` | 2 hours (configurable) | Pagination cursor entries |
+| `PaginationCursorCache` | `PaginationCursorRegistry` | `ConcurrentDictionary` | 1 hour (configurable) | Pagination cursor entries |
 
 Calling `PaginationCursorCache.Clear()` removes all cursors without affecting subscription, tenant, or resource group caches.
 

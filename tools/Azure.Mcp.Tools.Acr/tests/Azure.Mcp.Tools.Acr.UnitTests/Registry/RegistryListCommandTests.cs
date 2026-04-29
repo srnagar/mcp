@@ -38,7 +38,7 @@ public class RegistryListCommandTests
         _service = Substitute.For<IAcrService>();
         _logger = Substitute.For<ILogger<RegistryListCommand>>();
         _cursorRegistry = Substitute.For<IPaginationCursorRegistry>();
-        _paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions());
+        _paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions { Enabled = true });
 
         _command = new(_logger, _service, _cursorRegistry, _paginationOptions);
         _context = new(new ServiceCollection().BuildServiceProvider());

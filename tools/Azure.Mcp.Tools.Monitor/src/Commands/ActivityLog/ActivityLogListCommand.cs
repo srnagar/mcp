@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Net;
+using System.Text.Json.Serialization;
 using Azure.Mcp.Core.Commands.Subscription;
 using Azure.Mcp.Tools.Monitor.Models.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Options.ActivityLog;
@@ -24,7 +25,10 @@ public sealed class ActivityLogListCommand(
     : SubscriptionCommand<ActivityLogListOptions>
 {
     private const string CommandTitle = "List Activity Logs";
-    internal record ActivityLogListCommandResult(List<ActivityLogEventData> ActivityLogs, PaginationInfo Pagination);
+    internal record ActivityLogListCommandResult(
+        List<ActivityLogEventData> ActivityLogs,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        PaginationInfo? Pagination);
 
     private readonly IPaginationCursorRegistry _cursorRegistry = cursorRegistry;
     private readonly PaginationOptions _paginationOptions = paginationOptions.Value;
@@ -40,8 +44,8 @@ public sealed class ActivityLogListCommand(
         This command retrieves activity logs to help understand resource deployment history, modification activities, and access patterns.
         Returns activity log events with details including timestamp, operation name, status, and caller information. should be called to help retrieve information about why a resource failed to deploy or may not be working.
         Returns up to {_paginationOptions.DefaultPageSize} items per request. If pagination.nextCursor is non-null in the response,
-        more results are available. To fetch the next page, call this tool again with the same parameters and the returned
-        nextCursor value. Always confirm with the user before fetching additional pages.
+        more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned
+        nextCursor value as the cursor parameter. Always confirm with the user before fetching additional pages.
         """;
 
     public override string Title => CommandTitle;
@@ -76,7 +80,7 @@ public sealed class ActivityLogListCommand(
         options.ResourceType = parseResult.GetValueOrDefault<string>(ActivityLogOptionDefinitions.ResourceType.Name);
         options.Hours = parseResult.GetValueOrDefault<double>(ActivityLogOptionDefinitions.Hours.Name);
         options.EventLevel = parseResult.GetValueOrDefault<ActivityLogEventLevel?>(ActivityLogOptionDefinitions.EventLevel.Name);
-        options.NextCursor = PaginationHelper.BindNextCursor(parseResult);
+        options.Cursor = PaginationHelper.BindCursor(parseResult);
         return options;
     }
 
@@ -93,50 +97,69 @@ public sealed class ActivityLogListCommand(
         try
         {
             var service = context.GetService<IMonitorService>();
-            var toolName = $"monitor_activitylog_{Name}";
-            var sessionId = context.Activity?.Id ?? "default";
-            var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
-            // Resolve cursor for nextLink
-            string? nextLink = null;
-            var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                _cursorRegistry, options.NextCursor, toolName, sessionId, requestHash, cancellationToken);
-
-            if (cursorEntry is not null)
+            if (_paginationOptions.Enabled)
             {
-                cursorEntry.ContinuationState.TryGetValue("nextLink", out nextLink);
-            }
+                var toolName = $"monitor_activitylog_{Name}";
+                var sessionId = context.Activity?.Id ?? "default";
+                var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
-            var result = await service.ListActivityLogsPaged(
-                options.Subscription!,
-                options.ResourceName!,
-                options.ResourceGroup,
-                options.ResourceType,
-                options.Hours ?? 24.0,
-                options.EventLevel,
-                pageSize,
-                nextLink,
-                options.Tenant,
-                options.RetryPolicy,
-                cancellationToken);
+                string? nextLink = null;
+                var cursorEntry = await PaginationHelper.ResolveCursorAsync(
+                    _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
 
-            // Manage cursor
-            string? nextCursor = null;
-            if (!string.IsNullOrEmpty(result.NextLink))
-            {
-                var continuationState = new Dictionary<string, string>
+                if (cursorEntry is not null)
                 {
-                    ["nextLink"] = result.NextLink
-                };
+                    cursorEntry.ContinuationState.TryGetValue("nextLink", out nextLink);
+                }
 
-                nextCursor = await _cursorRegistry.CreateAsync(
-                    toolName, sessionId, requestHash, continuationState, cancellationToken);
+                var result = await service.ListActivityLogsPaged(
+                    options.Subscription!,
+                    options.ResourceName!,
+                    options.ResourceGroup,
+                    options.ResourceType,
+                    options.Hours ?? 24.0,
+                    options.EventLevel,
+                    pageSize,
+                    nextLink,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    cancellationToken);
+
+                string? nextCursor = null;
+                if (!string.IsNullOrEmpty(result.NextLink))
+                {
+                    var continuationState = new Dictionary<string, string>
+                    {
+                        ["nextLink"] = result.NextLink
+                    };
+
+                    nextCursor = await _cursorRegistry.CreateAsync(
+                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                }
+
+                var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
+                context.Response.Results = ResponseResult.Create(
+                    new ActivityLogListCommandResult(result.Items, pagination),
+                    MonitorJsonContext.Default.ActivityLogListCommandResult);
             }
+            else
+            {
+                var activityLogs = await service.ListActivityLogs(
+                    options.Subscription!,
+                    options.ResourceName!,
+                    options.ResourceGroup,
+                    options.ResourceType,
+                    options.Hours ?? 24.0,
+                    options.EventLevel,
+                    tenant: options.Tenant,
+                    retryPolicy: options.RetryPolicy,
+                    cancellationToken: cancellationToken);
 
-            var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
-            context.Response.Results = ResponseResult.Create(
-                new ActivityLogListCommandResult(result.Items, pagination),
-                MonitorJsonContext.Default.ActivityLogListCommandResult);
+                context.Response.Results = ResponseResult.Create(
+                    new ActivityLogListCommandResult(activityLogs, null),
+                    MonitorJsonContext.Default.ActivityLogListCommandResult);
+            }
         }
         catch (Exception ex)
         {

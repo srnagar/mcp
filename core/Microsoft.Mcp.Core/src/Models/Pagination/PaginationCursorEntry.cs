@@ -22,7 +22,7 @@ public sealed class PaginationCursorEntry
     public required string SessionId { get; init; }
 
     /// <summary>
-    /// Gets the hash of the original request parameters (excluding nextCursor).
+    /// Gets the hash of the original request parameters (excluding cursor).
     /// Used to validate that subsequent requests match the original query.
     /// </summary>
     public required string RequestHash { get; init; }

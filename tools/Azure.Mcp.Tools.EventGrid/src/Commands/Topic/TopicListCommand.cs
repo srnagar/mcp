@@ -10,6 +10,7 @@ using Microsoft.Mcp.Core.Models.Command;
 using Microsoft.Mcp.Core.Models.Option;
 using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Services.Pagination;
+using System.Text.Json.Serialization;
 
 namespace Azure.Mcp.Tools.EventGrid.Commands.Topic;
 
@@ -33,8 +34,8 @@ public sealed class TopicListCommand(
         $"""
         List or show all Event Grid topics in a subscription, optionally filtered by resource group, returning endpoints, access keys, provisioning state, and subscription details for event publishing and management. A subscription or topic name is required.
         Returns up to {_paginationOptions.DefaultPageSize} items per request. If pagination.nextCursor is non-null in the response,
-        more results are available. To fetch the next page, call this tool again with the same parameters and the returned
-        nextCursor value. Always confirm with the user before fetching additional pages.
+        more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned
+        nextCursor value as the cursor parameter. Always confirm with the user before fetching additional pages.
         """;
 
     public override string Title => CommandTitle;
@@ -61,7 +62,7 @@ public sealed class TopicListCommand(
     {
         var options = base.BindOptions(parseResult);
         options.ResourceGroup ??= parseResult.GetValueOrDefault<string>(OptionDefinitions.Common.ResourceGroup.Name);
-        options.NextCursor = PaginationHelper.BindNextCursor(parseResult);
+        options.Cursor = PaginationHelper.BindCursor(parseResult);
         return options;
     }
 
@@ -77,46 +78,60 @@ public sealed class TopicListCommand(
 
         try
         {
-            var toolName = $"eventgrid_topic_{Name}";
-            var sessionId = context.Activity?.Id ?? "default";
-            var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
-
-            // Resolve cursor for continuation token
-            string? armContinuationToken = null;
-            var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                _cursorRegistry, options.NextCursor, toolName, sessionId, requestHash, cancellationToken);
-
-            if (cursorEntry is not null)
+            if (_paginationOptions.Enabled)
             {
-                cursorEntry.ContinuationState.TryGetValue("continuationToken", out armContinuationToken);
-            }
+                var toolName = $"eventgrid_topic_{Name}";
+                var sessionId = context.Activity?.Id ?? "default";
+                var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
-            var result = await _eventGridService.GetTopicsPagedAsync(
-                options.Subscription!,
-                options.ResourceGroup,
-                options.Tenant,
-                options.RetryPolicy,
-                pageSize,
-                armContinuationToken,
-                cancellationToken);
+                string? armContinuationToken = null;
+                var cursorEntry = await PaginationHelper.ResolveCursorAsync(
+                    _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
 
-            // Manage cursor based on whether more results exist
-            string? nextCursor = null;
-            if (!string.IsNullOrEmpty(result.ContinuationToken))
-            {
-                var continuationState = new Dictionary<string, string>
+                if (cursorEntry is not null)
                 {
-                    ["continuationToken"] = result.ContinuationToken
-                };
+                    cursorEntry.ContinuationState.TryGetValue("continuationToken", out armContinuationToken);
+                }
 
-                nextCursor = await _cursorRegistry.CreateAsync(
-                    toolName, sessionId, requestHash, continuationState, cancellationToken);
+                var result = await _eventGridService.GetTopicsPagedAsync(
+                    options.Subscription!,
+                    options.ResourceGroup,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    pageSize,
+                    armContinuationToken,
+                    cancellationToken);
+
+                string? nextCursor = null;
+                if (!string.IsNullOrEmpty(result.ContinuationToken))
+                {
+                    var continuationState = new Dictionary<string, string>
+                    {
+                        ["continuationToken"] = result.ContinuationToken
+                    };
+
+                    nextCursor = await _cursorRegistry.CreateAsync(
+                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                }
+
+                var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
+                context.Response.Results = ResponseResult.Create(
+                    new TopicListCommandResult(result.Items, pagination),
+                    EventGridJsonContext.Default.TopicListCommandResult);
             }
+            else
+            {
+                var topics = await _eventGridService.GetTopicsAsync(
+                    options.Subscription!,
+                    options.ResourceGroup,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    cancellationToken);
 
-            var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
-            context.Response.Results = ResponseResult.Create(
-                new TopicListCommandResult(result.Items, pagination),
-                EventGridJsonContext.Default.TopicListCommandResult);
+                context.Response.Results = ResponseResult.Create(
+                    new TopicListCommandResult(topics, null),
+                    EventGridJsonContext.Default.TopicListCommandResult);
+            }
         }
         catch (Exception ex)
         {
@@ -129,5 +144,8 @@ public sealed class TopicListCommand(
         return context.Response;
     }
 
-    internal record TopicListCommandResult(List<EventGridTopicInfo> Topics, PaginationInfo Pagination);
+    internal record TopicListCommandResult(
+        List<EventGridTopicInfo> Topics,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        PaginationInfo? Pagination);
 }

@@ -8,20 +8,20 @@ This document describes the cursor-based pagination framework for Azure MCP tool
 
 ### Request
 
-Every paginated tool accepts an optional `nextCursor` parameter alongside its existing parameters:
+Every paginated tool accepts an optional `cursor` parameter alongside its existing parameters:
 
 ```json
 {
   "subscription": "my-sub",
   "resourceGroup": "my-rg",
-  "nextCursor": null
+  "cursor": null
 }
 ```
 
-- **First page**: `nextCursor` is `null` or omitted
-- **Subsequent pages**: `nextCursor` is the opaque string returned from the previous response
+- **First page**: `cursor` is `null` or omitted
+- **Subsequent pages**: `cursor` is the opaque string from the previous response's `pagination.nextCursor`
 
-When `nextCursor` is provided, the server validates that the cursor was issued for the same tool, session, and request parameters before using it.
+When `cursor` is provided, the server validates that the cursor was issued for the same tool, session, and request parameters before using it.
 
 ### Response
 
@@ -53,8 +53,8 @@ sequenceDiagram
     participant Cache as Pagination<br/>Cursor Registry
     participant Azure as Azure Service
 
-    Note over Client,Azure: First Page Request (nextCursor = null)
-    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: null })
+    Note over Client,Azure: First Page Request (cursor = null)
+    Client->>Server: CallTool(args: { subscription, resourceGroup, cursor: null })
     Server->>Server: ComputeRequestHash(args)
     Server->>Server: ResolveCursorAsync(null) → no cursor entry
     Server->>Azure: Fetch page (pageSize items, skip=0)
@@ -70,7 +70,7 @@ sequenceDiagram
     end
 
     Note over Client,Azure: Subsequent Page Request
-    Client->>Server: CallTool(args: { subscription, resourceGroup, nextCursor: "a1b2c3d4..." })
+    Client->>Server: CallTool(args: { subscription, resourceGroup, cursor: "a1b2c3d4..." })
     Server->>Server: ComputeRequestHash(args)
     Server->>Cache: ResolveCursorAsync → GetAsync("a1b2c3d4...", toolName, sessionId, requestHash)
     Note over Cache: Validates toolName + requestHash match stored entry
@@ -94,7 +94,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A[Tool ExecuteAsync] -->|Receives request| B[ComputeRequestHash from args]
-    B --> C{nextCursor<br/>provided?}
+    B --> C{cursor<br/>provided?}
     C -->|No| D[ResolveCursorAsync returns null]
     D --> E[Call Azure service<br/>skip=0, limit=pageSize]
 
@@ -145,7 +145,7 @@ Each cursor entry in the registry contains:
 |---|---|---|
 | `ToolName` | `string` | Tool that created the cursor (e.g., `azmcp_acr_registry_list`) |
 | `SessionId` | `string` | User/session scope for multi-user security |
-| `RequestHash` | `string` | SHA256 hash of request parameters (excluding `nextCursor`); validated on retrieval to ensure consistency |
+| `RequestHash` | `string` | SHA256 hash of request parameters (excluding `cursor`); validated on retrieval to ensure consistency |
 | `ContinuationState` | `Dictionary<string, string>` | Backend-specific state (e.g., `nextLink`, `offset`, `skipToken`) |
 | `CreatedAt` | `DateTimeOffset` | Timestamp for diagnostics |
 
@@ -175,7 +175,7 @@ This is surfaced to MCP clients as a `PaginationHint` in the tool's `Meta` prope
 
 Paginated tools append the following guidance to their description:
 
-> Returns up to {pageSize} items per request. If `pagination.nextCursor` is non-null in the response, more results are available. To fetch the next page, call this tool again with the same parameters and the returned `nextCursor` value. Always confirm with the user before fetching additional pages.
+> Returns up to {pageSize} items per request. If `pagination.nextCursor` is non-null in the response, more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned `nextCursor` value as the `cursor` parameter. Always confirm with the user before fetching additional pages.
 
 ## Configuration
 
@@ -189,6 +189,6 @@ Pagination behavior is configured via `PaginationOptions`:
 ## Security Considerations
 
 - **Session scoping**: Cursors are scoped to a session/user identity, preventing cross-user cursor reuse in HTTP mode
-- **Request hash validation**: On each cursor use, the server verifies the request parameters match the original request (excluding `nextCursor`), preventing parameter manipulation
+- **Request hash validation**: On each cursor use, the server verifies the request parameters match the original request (excluding `cursor`), preventing parameter manipulation
 - **TTL expiry**: Cursors automatically expire after the configured TTL, preventing stale data access
 - **Opaque IDs**: Cursor IDs are opaque GUIDs that reveal no information about internal state

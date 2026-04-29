@@ -57,7 +57,7 @@ public class EventGridService(ISubscriptionService subscriptionService, ITenantS
         string? resourceGroup = null,
         string? tenant = null,
         RetryPolicyOptions? retryPolicy = null,
-        int pageSize = 50,
+        int pageSize = 5,
         string? continuationToken = null,
         CancellationToken cancellationToken = default)
     {

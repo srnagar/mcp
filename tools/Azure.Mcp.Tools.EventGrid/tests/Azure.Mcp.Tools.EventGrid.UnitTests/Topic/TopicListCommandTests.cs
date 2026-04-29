@@ -36,7 +36,7 @@ public class TopicListCommandTests
         _eventGridService = Substitute.For<IEventGridService>();
         _logger = Substitute.For<ILogger<TopicListCommand>>();
         _cursorRegistry = Substitute.For<IPaginationCursorRegistry>();
-        _paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions());
+        _paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions { Enabled = true });
 
         var collection = new ServiceCollection().AddSingleton(_eventGridService);
 

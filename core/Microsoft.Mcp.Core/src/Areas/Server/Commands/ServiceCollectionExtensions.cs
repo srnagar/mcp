@@ -15,6 +15,7 @@ using Microsoft.Mcp.Core.Commands;
 using Microsoft.Mcp.Core.Configuration;
 using Microsoft.Mcp.Core.Extensions;
 using Microsoft.Mcp.Core.Helpers;
+using Microsoft.Mcp.Core.Models.Pagination;
 using ModelContextProtocol.Protocol;
 
 namespace Microsoft.Mcp.Core.Areas.Server.Commands;
@@ -243,6 +244,11 @@ public static class ServiceCollectionExtensions
         {
             mcpServerBuilder.WithStdioServerTransport();
         }
+
+        // Enable pagination in server mode. In direct CLI mode, PaginationOptions.Enabled
+        // remains false (the default) because the process exits after each command and
+        // in-memory cursors would be lost between invocations.
+        services.PostConfigure<PaginationOptions>(options => options.Enabled = true);
 
         return services;
     }

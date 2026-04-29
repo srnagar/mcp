@@ -9,6 +9,7 @@ using Microsoft.Mcp.Core.Commands;
 using Microsoft.Mcp.Core.Models.Command;
 using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Services.Pagination;
+using System.Text.Json.Serialization;
 
 namespace Azure.Mcp.Tools.Acr.Commands.Registry;
 
@@ -34,8 +35,8 @@ public sealed class RegistryListCommand(
         includes: name, location, loginServer, skuName, skuTier. If no registries are found the tool returns null results
         (consistent with other list commands).
         Returns up to {_paginationOptions.DefaultPageSize} items per request. If pagination.nextCursor is non-null in the response,
-        more results are available. To fetch the next page, call this tool again with the same parameters and the returned
-        nextCursor value. Always confirm with the user before fetching additional pages.
+        more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned
+        nextCursor value as the cursor parameter. Always confirm with the user before fetching additional pages.
         """;
 
     public override string Title => CommandTitle;
@@ -60,7 +61,7 @@ public sealed class RegistryListCommand(
     protected override RegistryListOptions BindOptions(ParseResult parseResult)
     {
         var options = base.BindOptions(parseResult);
-        options.NextCursor = PaginationHelper.BindNextCursor(parseResult);
+        options.Cursor = PaginationHelper.BindCursor(parseResult);
         return options;
     }
 
@@ -76,50 +77,68 @@ public sealed class RegistryListCommand(
 
         try
         {
-            var toolName = $"acr_registry_{Name}";
-            var sessionId = context.Activity?.Id ?? "default";
-            var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
-
-            // Resolve cursor — returns null for first page, entry with state for subsequent pages
             int skip = 0;
-            var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                _cursorRegistry, options.NextCursor, toolName, sessionId, requestHash, cancellationToken);
+            PaginationInfo? pagination = null;
 
-            if (cursorEntry is not null &&
-                cursorEntry.ContinuationState.TryGetValue("offset", out var offsetStr) &&
-                int.TryParse(offsetStr, out var offset))
+            if (_paginationOptions.Enabled)
             {
-                skip = offset;
-            }
+                var toolName = $"acr_registry_{Name}";
+                var sessionId = context.Activity?.Id ?? "default";
+                var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
-            _logger.LogInformation("Listing container registries. Subscription: {Subscription}, ResourceGroup: {ResourceGroup}, Skip: {Skip}, Limit: {Limit}", options.Subscription, options.ResourceGroup, skip, pageSize);
+                var cursorEntry = await PaginationHelper.ResolveCursorAsync(
+                    _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
 
-            var registries = await _acrService.ListRegistries(
-                options.Subscription!,
-                options.ResourceGroup,
-                options.Tenant,
-                options.RetryPolicy,
-                cancellationToken,
-                limit: pageSize,
-                skip: skip);
-
-            // Determine if there are more results and manage cursor
-            string? nextCursor = null;
-            if (registries?.AreResultsTruncated == true)
-            {
-                var continuationState = new Dictionary<string, string>
+                if (cursorEntry is not null &&
+                    cursorEntry.ContinuationState.TryGetValue("offset", out var offsetStr) &&
+                    int.TryParse(offsetStr, out var offset))
                 {
-                    ["offset"] = registries.NextOffset.ToString()
-                };
+                    skip = offset;
+                }
 
-                nextCursor = await _cursorRegistry.CreateAsync(
-                    toolName, sessionId, requestHash, continuationState, cancellationToken);
+                _logger.LogInformation("Listing container registries. Subscription: {Subscription}, ResourceGroup: {ResourceGroup}, Skip: {Skip}, Limit: {Limit}", options.Subscription, options.ResourceGroup, skip, pageSize);
+
+                var registries = await _acrService.ListRegistries(
+                    options.Subscription!,
+                    options.ResourceGroup,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    cancellationToken,
+                    limit: pageSize,
+                    skip: skip);
+
+                string? nextCursor = null;
+                if (registries?.AreResultsTruncated == true)
+                {
+                    var continuationState = new Dictionary<string, string>
+                    {
+                        ["offset"] = registries.NextOffset.ToString()
+                    };
+
+                    nextCursor = await _cursorRegistry.CreateAsync(
+                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                }
+
+                pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
+                context.Response.Results = ResponseResult.Create(
+                    new RegistryListCommandResult(registries?.Results ?? [], pagination),
+                    AcrJsonContext.Default.RegistryListCommandResult);
             }
+            else
+            {
+                _logger.LogInformation("Listing container registries (non-paginated). Subscription: {Subscription}, ResourceGroup: {ResourceGroup}", options.Subscription, options.ResourceGroup);
 
-            var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
-            context.Response.Results = ResponseResult.Create(
-                new RegistryListCommandResult(registries?.Results ?? [], pagination),
-                AcrJsonContext.Default.RegistryListCommandResult);
+                var registries = await _acrService.ListRegistries(
+                    options.Subscription!,
+                    options.ResourceGroup,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    cancellationToken);
+
+                context.Response.Results = ResponseResult.Create(
+                    new RegistryListCommandResult(registries?.Results ?? [], null),
+                    AcrJsonContext.Default.RegistryListCommandResult);
+            }
         }
         catch (Exception ex)
         {
@@ -132,5 +151,8 @@ public sealed class RegistryListCommand(
         return context.Response;
     }
 
-    internal record RegistryListCommandResult(List<Models.AcrRegistryInfo> Registries, PaginationInfo Pagination);
+    internal record RegistryListCommandResult(
+        List<Models.AcrRegistryInfo> Registries,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        PaginationInfo? Pagination);
 }

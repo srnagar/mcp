@@ -5,5 +5,5 @@ namespace Azure.Mcp.Tools.EventGrid.Options.Topic;
 
 public class TopicListOptions : BaseEventGridOptions
 {
-    public string? NextCursor { get; set; }
+    public string? Cursor { get; set; }
 }

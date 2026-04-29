@@ -42,7 +42,7 @@ public sealed class ActivityLogListCommandTests
         _serviceProvider = collection.BuildServiceProvider();
 
         var cursorRegistry = Substitute.For<IPaginationCursorRegistry>();
-        var paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions());
+        var paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions { Enabled = true });
         _command = new(_logger, cursorRegistry, paginationOptions);
         _context = new(_serviceProvider);
         _commandDefinition = _command.GetCommand();

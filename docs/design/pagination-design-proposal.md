@@ -21,13 +21,15 @@
 
 ## Problem Statement
 
-Azure MCP tools that return collections (list, get-as-list, query) currently consume all pages from the underlying Azure service and return the entire result set in a single tool response. This creates three compounding problems:
+Azure MCP tools that return collections (list, get-as-list, query) either consume all pages from the underlying Azure service and return the entire result set in a single tool response, or cap results at a fixed limit with no mechanism for the client to retrieve the remaining items. Both behaviors are problematic:
 
 1. **Context window overflow.** LLM clients have hard token limits on tool responses. For example, Claude Code enforces a 25,000-token ceiling per tool call. A `subscription list` returning all subscriptions produced 44,221 tokens and was rejected outright ([microsoft/mcp#428](https://github.com/microsoft/mcp/issues/428)). This is not an edge case — any enterprise tenant with a moderate number of resources will exceed these limits for common listing operations.
 
 2. **Latency and memory pressure.** Fetching all pages from Azure before responding means the MCP server must hold the entire result set in memory and the client must wait for all pages to complete. For services with thousands of resources (e.g., blob containers, Event Grid subscriptions, policy assignments), this causes multi-second latencies and risks out-of-memory conditions on the server.
 
 3. **Wasted work.** In agent-driven workflows, the LLM often needs only a subset of results — enough to find a specific resource, confirm a configuration, or select from a short list. Returning 500 items when the model needs 5 is wasteful for compute, network, and token budget.
+
+4. **No protocol-level pagination for tool calls.** The [MCP specification defines pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination) using an opaque cursor-based approach, but only for a limited set of list operations — `resources/list`, `resources/templates/list`, `prompts/list`, and `tools/list`. These are metadata-listing methods that enumerate what the server exposes, not the results of invoking a tool. Critically, the specification does **not** define any pagination mechanism for `tools/call` — the method used to execute Azure service queries. This means there is no built-in protocol support for paginating the actual data returned by tool invocations. Any pagination for tool call results must be implemented as an application-level convention on top of the MCP protocol, which is what this design proposes.
 
 ### What pagination addresses
 
@@ -41,15 +43,15 @@ Azure service backends use diverse pagination mechanisms — KQL offsets (Resour
 
 ## Design Goals
 
-1. **Uniform client experience.** Every paginated tool uses the same `nextCursor` request/response contract. Clients never need to understand Azure-specific pagination mechanisms.
+1. **Uniform client experience.** Every paginated tool uses the same `cursor`/`nextCursor` request/response contract. Clients never need to understand Azure-specific pagination mechanisms.
 
-2. **Backward compatible.** Existing tools continue to work without pagination. The `nextCursor` parameter is optional, and responses without `pagination` are valid.
+2. **Backward compatible.** Existing tools continue to work without pagination. The `cursor` parameter is optional, and responses without `pagination` are valid.
 
 3. **Transport agnostic.** The design works identically in stdio (CLI, local agent) and HTTP (remote, multi-user) transport modes.
 
-4. **Safe by default.** Cursors are session-scoped, request-hash-validated, and TTL-expired. A cursor issued for one user/tool/query cannot be reused for a different user/tool/query.
+4. **Safe by default.** Cursors are request-hash-validated, and TTL-expired. A cursor issued for one tool/query cannot be reused for a different tool/query.
 
-5. **Dedicated in-memory cache.** Pagination cursors are stored in a purpose-built `PaginationCursorCache` backed by `ConcurrentDictionary` with absolute TTL expiration. This cache is completely independent of other caching concerns (e.g., subscription/tenant caching).
+5. **Dedicated in-memory cache.** Pagination cursors are stored in a purpose-built `PaginationCursorCache` with absolute TTL expiration. This cache is completely independent of other caching concerns (e.g., subscription/tenant caching).
 
 6. **Incremental rollout.** Pagination can be enabled per-tool without modifying other tools. Tools opt in by setting `SupportsPagination = true` in their metadata.
 
@@ -68,7 +70,7 @@ graph TB
     subgraph Server["MCP Server"]
         TC["Tool Command<br/>(e.g., AcrRegistryListCommand)"]
         PCR["PaginationCursorRegistry"]
-        PCC["PaginationCursorCache<br/>(ConcurrentDictionary + TTL)"]
+        PCC["PaginationCursorCache"]
         SVC["Azure Service Layer"]
     end
 
@@ -78,7 +80,7 @@ graph TB
         DP["Data-plane APIs"]
     end
 
-    VS -->|"1. tools/call { nextCursor? }"| TC
+    VS -->|"1. tools/call { cursor? }"| TC
     TC -->|"2. GetAsync(cursorId)"| PCR
     PCR --> PCC
     TC -->|"3. Fetch page"| SVC
@@ -92,7 +94,7 @@ graph TB
 
 | Component | Responsibility |
 |---|---|
-| **Tool Command** | Accepts `nextCursor`, computes request hash, resolves cursor via registry, calls service for one page, stores new cursor if more pages exist |
+| **Tool Command** | Accepts `cursor`, computes request hash, resolves cursor via registry, calls service for one page, stores new cursor if more pages exist |
 | **PaginationCursorRegistry** | Creates and retrieves cursor entries (opaque GUID IDs). On retrieval, validates tool name, session, and request-hash consistency. |
 | **PaginationCursorCache** | Dedicated in-memory store for pagination cursor entries. Uses `ConcurrentDictionary` with absolute TTL expiration. |
 | **Azure Service Layer** | Fetches one page of results using backend-specific pagination (offset, continuation token, nextLink, etc.) |
@@ -103,24 +105,24 @@ graph TB
 
 ### Request schema
 
-Every paginated tool accepts an optional `nextCursor` parameter alongside its existing parameters:
+Every paginated tool accepts an optional `cursor` parameter alongside its existing parameters:
 
 ```json
 {
   "subscription": "my-sub",
   "resourceGroup": "my-rg",
-  "nextCursor": null
+  "cursor": null
 }
 ```
 
-- **First page:** `nextCursor` is `null`, omitted, or empty string
-- **Subsequent pages:** `nextCursor` is the opaque string from the previous response
+- **First page:** `cursor` is `null`, omitted, or empty string
+- **Subsequent pages:** `cursor` is the opaque string from the previous response's `pagination.nextCursor`
 
-When `nextCursor` is provided, the server validates that:
+When `cursor` is provided, the server validates that:
 1. The cursor exists and has not expired
 2. The cursor was issued by the same tool
 3. The cursor belongs to the same session (in HTTP mode)
-4. The request parameters (excluding `nextCursor`) hash to the same value as the original request
+4. The request parameters (excluding `cursor`) hash to the same value as the original request
 
 ### Response schema
 
@@ -165,20 +167,35 @@ This is surfaced to MCP clients as a `paginationHint` annotation in the tool lis
 
 Paginated tools append the following to their description:
 
-> Returns up to {pageSize} items per request. If `pagination.nextCursor` is non-null in the response, more results are available. To fetch the next page, call this tool again with the same parameters and the returned `nextCursor` value. Always confirm with the user before fetching additional pages.
+> Returns up to {pageSize} items per request. If `pagination.nextCursor` is non-null in the response, more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned `nextCursor` value as the `cursor` parameter. Always confirm with the user before fetching additional pages.
+
+
+### Server-level pagination instructions
+
+The MCP server includes a pagination instruction in `azure-rules.txt` (sent to MCP clients as server-level
+instructions):
+
+> **Pagination:** Some tools return paginated results. When a tool response includes a `pagination` object with a
+> non-null `nextCursor` value, inform the user that more results are available and ask whether they would like to
+> fetch the next page before proceeding. To retrieve the next page, call the same tool with identical parameters
+> and include the `nextCursor` value as the `cursor` parameter.
+
+This instruction is delivered to MCP clients during session initialization, ensuring that all connected agents
+understand how to handle paginated responses without relying solely on per-tool descriptions.
 
 ---
+
 
 ## Cursor Lifecycle — Creation, Storage, Retrieval, and Eviction
 
 ```mermaid
 flowchart TD
-    A["Tool ExecuteAsync"] -->|Receives request| B["ComputeRequestHash from args"]
-    B --> C{"nextCursor<br/>provided?"}
+    A["Tool ExecuteAsync"] -->|Receives request| C{"cursor<br/>provided?"}
     C -->|No| D["ResolveCursorAsync returns null"]
     D --> E["Call Azure service<br/>skip=0, limit=pageSize"]
 
-    C -->|Yes| F["ResolveCursorAsync calls<br/>CursorRegistry.GetAsync<br/>validates: toolName, sessionId,<br/>requestHash match"]
+    C -->|Yes| B["ComputeRequestHash from args"]
+    B --> F["ResolveCursorAsync calls<br/>CursorRegistry.GetAsync<br/>validates: toolName, sessionId,<br/>requestHash match"]
     F -->|Valid| G["Extract continuation state<br/>from cursor entry"]
     G --> H["Call Azure service<br/>using continuation state"]
 
@@ -197,7 +214,7 @@ flowchart TD
 
 ### Cursor creation (first page)
 
-When a tool receives a request without `nextCursor` (or with `nextCursor = null`):
+When a tool receives a request without `cursor` (or with `cursor = null`):
 
 1. The tool calls the Azure service to fetch the first page of results (up to `pageSize` items).
 2. If the service indicates more results are available (e.g., `AreResultsTruncated`, non-null continuation token, presence of `nextLink`), the tool creates a cursor:
@@ -232,7 +249,7 @@ public sealed class PaginationCursorEntry
 **Key design decisions:**
 
 - **Cursor ID format:** Opaque GUID (`Guid.NewGuid().ToString("N")`) — reveals no internal state and is not guessable.
-- **Request hash validation:** SHA256 of the canonical request parameters (sorted, serialized, excluding `nextCursor`). Stored alongside the cursor and validated on retrieval to ensure a cursor cannot be reused with different query parameters.
+- **Request hash validation:** SHA256 of the canonical request parameters (sorted, serialized, excluding `cursor`). Stored alongside the cursor and validated on retrieval to ensure a cursor cannot be reused with different query parameters.
 - **ContinuationState:** A generic `Dictionary<string, string>` that accommodates all Azure pagination backends:
   - Resource Graph: `{ "offset": "50" }`
   - ARM SDK: `{ "continuationToken": "<base64-token>" }`
@@ -242,11 +259,11 @@ public sealed class PaginationCursorEntry
 
 ### Cursor retrieval and validation
 
-When a client presents a `nextCursor`, the registry retrieves the entry and validates:
+When a client presents a `cursor`, the registry retrieves the entry and validates:
 
 1. **Existence and TTL** — the cursor must exist in the cache and not be expired.
 2. **Tool name match** — the cursor must have been created by the same tool.
-3. **Request hash match** — the request parameters (excluding `nextCursor`) must hash to the same value as when the cursor was created. This prevents reusing a cursor from one query with different parameters.
+3. **Request hash match** — the request parameters (excluding `cursor`) must hash to the same value as when the cursor was created. This prevents reusing a cursor from one query with different parameters.
 
 If any validation fails, the cursor is rejected and the client receives an error.
 
@@ -254,9 +271,9 @@ Each page in a listing gets its own unique cursor ID because each `CreateAsync` 
 
 ### Cursor retrieval (subsequent pages)
 
-When a tool receives a request with a non-null `nextCursor`:
+When a tool receives a request with a non-null `cursor`:
 
-1. The tool computes the request hash from the current parameters (excluding `nextCursor`).
+1. The tool computes the request hash from the current parameters (excluding `cursor`).
 2. It calls `_cursorRegistry.GetAsync(cursorId, toolName, sessionId, requestHash)`.
 3. The registry validates:
    - **Existence:** The cursor ID exists in the cache (not expired).
@@ -269,15 +286,13 @@ When a tool receives a request with a non-null `nextCursor`:
 
 ### Cursor eviction
 
-Cursors are evicted in three ways:
+Cursors are evicted in two ways:
 
 1. **Natural TTL expiry.** The `PaginationCursorCache` automatically evicts entries after `CursorTimeToLive` (default 1 hour). This handles abandoned cursors (e.g., the user stopped paging) and consumed cursors that are no longer needed for retries.
 
-2. **Session cleanup.** When a session ends (e.g., stdio transport closes, HTTP session timeout), `ClearSessionAsync(sessionId)` removes all cursors for that session.
+2. **Manual clear.** `ClearAllAsync()` removes all cursors across all sessions. This is an administrative operation.
 
-3. **Manual clear.** `ClearAllAsync()` removes all cursors across all sessions. This is an administrative operation.
-
-> **Note:** Cursors are **not** explicitly deleted when the last page is reached. This is intentional — the consumed cursor must remain available for client-side retries. All cleanup relies on TTL expiry or session cleanup.
+> **Note:** Cursors are **not** explicitly deleted when the last page is reached. This is intentional — the consumed cursor must remain available for client-side retries. All cleanup relies on TTL expiry or manual cleanup.
 
 ### Interaction sequence diagram
 
@@ -288,9 +303,8 @@ sequenceDiagram
     participant Registry as Pagination<br/>Cursor Registry
     participant Azure as Azure Service
 
-    Note over Client,Azure: First Page Request (nextCursor = null)
-    Client->>Server: CallTool(args: { subscription, nextCursor: null })
-    Server->>Server: ComputeRequestHash(args)
+    Note over Client,Azure: First Page Request (cursor = null)
+    Client->>Server: CallTool(args: { subscription, cursor: null })
     Server->>Server: ResolveCursorAsync(null) → no cursor entry
     Server->>Azure: Fetch page (pageSize items, skip=0)
     Azure-->>Server: Page 1 results (truncated flag or continuation token)
@@ -305,7 +319,7 @@ sequenceDiagram
     end
 
     Note over Client,Azure: Subsequent Page Request
-    Client->>Server: CallTool(args: { subscription, nextCursor: "a1b2c3d4..." })
+    Client->>Server: CallTool(args: { subscription, cursor: "a1b2c3d4..." })
     Server->>Server: ComputeRequestHash(args)
     Server->>Registry: ResolveCursorAsync → GetAsync("a1b2c3d4...", toolName, sessionId, requestHash)
     Note over Registry: Validates toolName + requestHash match stored entry
@@ -328,7 +342,7 @@ sequenceDiagram
 
 ## User Experience
 
-### Chat mode (stdio transport)
+### Chat mode 
 
 In chat mode, the MCP server runs as a child process of the MCP client (e.g., VS Code, Claude Code, Copilot CLI). The LLM agent drives the pagination loop:
 
@@ -346,7 +360,7 @@ Agent: "Here are the first 50 container registries:
 
 User: "Yes"
 
-Agent: [calls azmcp acr registry list with nextCursor = "c_abc123"]
+Agent: [calls azmcp acr registry list with cursor = "c_abc123"]
        → Response: 12 items, nextCursor = null
 
 Agent: "Here are the remaining 12 container registries:
@@ -383,32 +397,29 @@ Cursors are valid for the configured TTL (default 1 hour), allowing the user to:
 - Switch to a different tool, come back, and continue paging
 - Close and reopen the conversation within the TTL window (stdio only — the server process must remain running)
 
----
+### CLI mode (direct execution)
 
-## Authentication — Local and Remote Scenarios
+When commands are run directly from the command line (e.g., `azmcp.exe acr registry list`), the process exits
+after the command completes and all in-memory state — including the `PaginationCursorCache` — is destroyed. This
+makes cursor-based pagination fundamentally unusable in direct CLI mode.
 
-### Local (stdio) authentication
+To handle this, pagination is **disabled** in CLI mode via the `PaginationOptions.Enabled` property:
 
-In stdio mode, the MCP server runs as a single-user process. Authentication is handled by `DefaultAzureCredential` (typically `AzureCLICredential` from `az login`). All cursors belong to the same implicit session.
+- `Enabled` defaults to `false`.
+- When the MCP server starts (stdio or HTTP transport), `AddAzureMcpServer()` calls
+  `PostConfigure<PaginationOptions>` to set `Enabled = true`.
+- In direct CLI mode, `AddAzureMcpServer()` is never called, so `Enabled` remains `false`.
 
-**Session ID:** In stdio mode, there is no multi-user concern. The session ID can be a fixed value (e.g., `"stdio"`) or the process ID. The session ID validation in the cursor registry is still enforced for consistency but is effectively a no-op since there is only one session.
+When pagination is disabled:
+- Commands call the original (non-paged) service methods and return all available results.
+- The `--cursor` option is still registered (it is part of the command schema) but is not processed.
+- The response **omits** the `pagination` object entirely (the `PaginationInfo` field is serialized as `null`
+  and excluded via `JsonIgnoreCondition.WhenWritingNull`).
 
-### Remote (HTTP) authentication
+This ensures a clean CLI experience — users see all results without pagination metadata that they cannot act on.
+For paginated access, users should run the MCP server in stdio or HTTP mode.
 
-In HTTP mode, the MCP server runs as a shared service. Each request is authenticated via:
-- **On-behalf-of (OBO):** The MCP client provides a bearer token. The server authenticates to Azure on behalf of the user via OBO flow. Each user has a distinct identity.
-- **Managed identity:** The server uses its own identity. All users share the server's permissions.
 
-**Session ID:** In HTTP mode, the session ID is derived from the authenticated user's identity (e.g., OID from the JWT claims) or the MCP session ID. This ensures:
-- User A's cursors cannot be used by User B
-- Cursor-bound Azure credentials match the requesting user
-- Token refresh happens per-user, not per-cursor
-
-**Important:** The Azure credentials used to fetch page N must be the same (or equivalent) credentials used to fetch page 1. For OBO scenarios, the OBO token must be refreshable for the cursor's lifetime. If the token expires and cannot be refreshed, the cursor becomes unusable and the client must start a new pagination sequence.
-
-### Credential caching interaction
-
-The existing `ICacheService` caches `AuthenticatedClient` instances (TTL: 15 minutes) and tenant/subscription data. Pagination cursors use a completely separate `PaginationCursorCache` instance with no shared state. There is no cross-contamination between credential cache entries and pagination cache entries.
 
 ---
 
@@ -422,11 +433,11 @@ Pagination cursors are inherently stateful — they map an opaque cursor ID to b
 
 2. **MCP protocol is request/response.** Each `tools/call` is an independent request. There is no persistent connection or stream between pages. The cursor registry bridges this gap.
 
-3. **Multi-user isolation.** In HTTP mode, cursor state must be partitioned by user and validated on each access.
+3. **Tool-specific continuation state varies widely.** Without caching, each tool would need to expose a request and response schema specific to its underlying Azure service's pagination mechanism — offsets for Resource Graph, continuation tokens for ARM, `nextLink` URLs for REST, `$skiptoken` for OData, etc. This would force clients to understand and manage service-specific continuation state, making the client-server interaction significantly more complicated. By caching continuation state server-side behind an opaque cursor ID, all tools present a uniform pagination contract regardless of backend differences.
 
 ### In-memory cache — `PaginationCursorCache`
 
-Pagination cursors are stored in a dedicated `PaginationCursorCache` — a `ConcurrentDictionary<string, CacheItem>` with absolute TTL expiration:
+Pagination cursors are stored in a dedicated `PaginationCursorCache` with absolute TTL expiration:
 
 - **Implementation:** `PaginationCursorCache` (registered as singleton)
 - **Backing store:** `ConcurrentDictionary` with per-entry `ExpiresAt` timestamp
@@ -473,10 +484,6 @@ The pagination cache is fully independent from the general `ICacheService`:
 
 Calling `PaginationCursorCache.Clear()` removes all cursors without affecting subscription, tenant, or resource group caches.
 
-### Note on `HttpServiceCacheService`
-
-The current `HttpServiceCacheService` is a no-op stub — all methods return defaults. This was intentionally left unimplemented pending design decisions around per-user vs. per-request caching and Entra Conditional Access implications. **Pagination in HTTP mode requires this stub to be replaced with a real implementation** (Phase 2). Until then, pagination in HTTP mode will not persist cursors between requests, effectively falling back to single-page responses.
-
 ---
 
 ## Error Handling
@@ -513,7 +520,7 @@ When a cursor issued by tool A is used with tool B:
 
 ### Request parameter mismatch
 
-When the request parameters (excluding `nextCursor`) differ from the original request:
+When the request parameters (excluding `cursor`) differ from the original request:
 
 ```json
 {
@@ -527,25 +534,11 @@ When the request parameters (excluding `nextCursor`) differ from the original re
 
 This prevents attacks or mistakes where a user modifies filter parameters mid-pagination, which could produce inconsistent results.
 
-### Session mismatch (HTTP mode)
-
-When user B attempts to use a cursor created by user A:
-
-```json
-{
-  "status": 403,
-  "error": {
-    "code": "CursorAccessDenied",
-    "message": "This pagination cursor belongs to a different session."
-  }
-}
-```
-
 ### Agent recovery guidance
 
 Tool descriptions include recovery instructions for the LLM:
 
-> If you receive an "InvalidCursor" error, discard the cursor and call the tool again without `nextCursor` to restart from the first page.
+> If you receive an "InvalidCursor" error, discard the cursor and call the tool again without `cursor` to restart from the first page.
 
 This ensures agents can recover gracefully without user intervention.
 
@@ -616,7 +609,8 @@ The [MCP specification](https://modelcontextprotocol.io/specification/2025-03-26
 
 Azure MCP's design follows the proposed extension:
 - `paginationHint: true` in tool annotations → `SupportsPagination = true` in `ToolMetadata`
-- `pagination.nextCursor` in response → `PaginationInfo.NextCursor`
+- `cursor` in request → `--cursor` option (matching the MCP spec's request-side parameter name)
+- `pagination.nextCursor` in response → `PaginationInfo.NextCursor` (matching the MCP spec's response-side field name)
 - Error code `-32602` for invalid cursors → `InvalidCursor` error response
 
 ---
@@ -644,11 +638,8 @@ Individual tools may override `DefaultPageSize` based on the expected response s
 
 ## References
 
-- Internal design: [`docs/design/pagination.md`](pagination.md)
-- Tool inventory: [`docs/azure-mcp-list-tools.md`](../azure-mcp-list-tools.md)
 - [microsoft/mcp#428 — Context window overflow from unbounded tool responses](https://github.com/microsoft/mcp/issues/428)
 - [modelcontextprotocol/modelcontextprotocol#799 — Extend pagination to all tool request/response patterns](https://github.com/modelcontextprotocol/modelcontextprotocol/discussions/799)
-- [Azure MCP pagination problem statement (Gist)](https://gist.github.com/xiangyan99/32bebf596ae2903e46989422dc4ea757)
 - [MCP Specification — Pagination](https://modelcontextprotocol.io/specification/2025-03-26/server/utilities/pagination)
 - [MCP Tool Annotations](https://modelcontextprotocol.io/docs/concepts/tools#tool-annotations)
 

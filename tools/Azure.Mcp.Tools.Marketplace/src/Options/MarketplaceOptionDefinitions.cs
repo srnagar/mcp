@@ -19,7 +19,7 @@ public static class MarketplaceOptionDefinitions
     public const string OrderByName = "orderby";
     public const string SelectName = "select";
     public const string ExpandName = "expand";
-    public const string NextCursorName = "next-cursor";
+    public const string CursorName = "cursor";
 
     public static readonly Option<string> ProductId = new($"--{ProductIdName}")
     {
@@ -99,7 +99,7 @@ public static class MarketplaceOptionDefinitions
         Required = false
     };
 
-    public static readonly Option<string> NextCursor = new($"--{NextCursorName}")
+    public static readonly Option<string> Cursor = new($"--{CursorName}")
     {
         Description = "Pagination cursor to retrieve the next page of results. Use the NextPageLink value from a previous response.",
         Required = false

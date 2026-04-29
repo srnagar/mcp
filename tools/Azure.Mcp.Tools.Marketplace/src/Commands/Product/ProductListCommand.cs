@@ -52,7 +52,7 @@ public sealed class ProductListCommand(ILogger<ProductListCommand> logger, IMark
         options.Add(MarketplaceOptionDefinitions.Filter);
         options.Add(MarketplaceOptionDefinitions.OrderBy);
         options.Add(MarketplaceOptionDefinitions.Select);
-        options.Add(MarketplaceOptionDefinitions.NextCursor);
+        options.Add(MarketplaceOptionDefinitions.Cursor);
         options.Add(MarketplaceOptionDefinitions.Expand);
     }
 
@@ -64,7 +64,7 @@ public sealed class ProductListCommand(ILogger<ProductListCommand> logger, IMark
         options.Filter = parseResult.GetValueOrDefault<string>(MarketplaceOptionDefinitions.Filter.Name);
         options.OrderBy = parseResult.GetValueOrDefault<string>(MarketplaceOptionDefinitions.OrderBy.Name);
         options.Select = parseResult.GetValueOrDefault<string>(MarketplaceOptionDefinitions.Select.Name);
-        options.NextCursor = parseResult.GetValueOrDefault<string>(MarketplaceOptionDefinitions.NextCursor.Name);
+        options.Cursor = parseResult.GetValueOrDefault<string>(MarketplaceOptionDefinitions.Cursor.Name);
         options.Expand = parseResult.GetValueOrDefault<string>(MarketplaceOptionDefinitions.Expand.Name);
         return options;
     }
@@ -90,7 +90,7 @@ public sealed class ProductListCommand(ILogger<ProductListCommand> logger, IMark
                 options.Filter,
                 options.OrderBy,
                 options.Select,
-                options.NextCursor,
+                options.Cursor,
                 options.Expand,
                 options.Tenant,
                 options.RetryPolicy,

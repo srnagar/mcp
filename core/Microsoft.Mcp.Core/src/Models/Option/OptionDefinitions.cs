@@ -13,7 +13,7 @@ public static partial class OptionDefinitions
         public const string SubscriptionName = "subscription";
         public const string ResourceGroupName = "resource-group";
         public const string AuthMethodName = "auth-method";
-        public const string NextCursorName = "next-cursor";
+        public const string CursorName = "cursor";
 
         public static readonly Option<string> Tenant = new($"--{TenantName}")
         {
@@ -40,7 +40,7 @@ public static partial class OptionDefinitions
             Required = false
         };
 
-        public static readonly Option<string> NextCursor = new($"--{NextCursorName}")
+        public static readonly Option<string> Cursor = new($"--{CursorName}")
         {
             Description = "Opaque cursor from a previous paginated response. When present, fetches the next page of results. " +
                 "The client should prompt the user before fetching additional pages.",

@@ -19,7 +19,7 @@ public interface IPaginationCursorRegistry
     /// </summary>
     /// <param name="toolName">The name of the tool creating the cursor.</param>
     /// <param name="sessionId">The session or user identity that owns the cursor.</param>
-    /// <param name="requestHash">Hash of the request parameters (excluding nextCursor).</param>
+    /// <param name="requestHash">Hash of the request parameters (excluding cursor).</param>
     /// <param name="continuationState">Backend-specific state for fetching the next page.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>An opaque cursor ID string.</returns>

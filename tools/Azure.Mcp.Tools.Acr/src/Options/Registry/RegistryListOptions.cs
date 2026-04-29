@@ -5,5 +5,5 @@ namespace Azure.Mcp.Tools.Acr.Options.Registry;
 
 public class RegistryListOptions : BaseAcrOptions
 {
-    public string? NextCursor { get; set; }
+    public string? Cursor { get; set; }
 }

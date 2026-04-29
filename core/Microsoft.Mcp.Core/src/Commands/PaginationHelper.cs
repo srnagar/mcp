@@ -16,26 +16,26 @@ namespace Microsoft.Mcp.Core.Commands;
 public static class PaginationHelper
 {
     /// <summary>
-    /// Registers the <c>nextCursor</c> option on a command that supports pagination.
+    /// Registers the <c>cursor</c> option on a command that supports pagination.
     /// </summary>
     /// <param name="command">The command to add the option to.</param>
     public static void RegisterPaginationOption(Command command)
     {
-        command.Options.Add(OptionDefinitions.Common.NextCursor);
+        command.Options.Add(OptionDefinitions.Common.Cursor);
     }
 
     /// <summary>
-    /// Binds the <c>nextCursor</c> value from the parsed command line arguments.
+    /// Binds the <c>cursor</c> value from the parsed command line arguments.
     /// </summary>
     /// <param name="parseResult">The parsed command line arguments.</param>
     /// <returns>The cursor value, or <see langword="null"/> if not provided.</returns>
-    public static string? BindNextCursor(ParseResult parseResult)
+    public static string? BindCursor(ParseResult parseResult)
     {
-        return parseResult.GetValueOrDefault<string>(OptionDefinitions.Common.NextCursor.Name);
+        return parseResult.GetValueOrDefault<string>(OptionDefinitions.Common.Cursor.Name);
     }
 
     /// <summary>
-    /// Computes a deterministic hash of the request parameters (excluding <c>nextCursor</c>)
+    /// Computes a deterministic hash of the request parameters (excluding <c>cursor</c>)
     /// to validate that subsequent page requests match the original query.
     /// </summary>
     /// <param name="parseResult">The parsed command line arguments.</param>
@@ -47,10 +47,10 @@ public static class PaginationHelper
 
         foreach (var option in command.Options.OrderBy(o => o.Name, StringComparer.Ordinal))
         {
-            // Skip the nextCursor option itself — it's not part of the request identity
+            // Skip the cursor option itself — it's not part of the request identity
             if (string.Equals(
                 Helpers.NameNormalization.NormalizeOptionName(option.Name),
-                OptionDefinitions.Common.NextCursorName,
+                OptionDefinitions.Common.CursorName,
                 StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -92,7 +92,7 @@ public static class PaginationHelper
     /// the first page or validating and retrieving an existing cursor for subsequent pages.
     /// </summary>
     /// <param name="registry">The pagination cursor registry.</param>
-    /// <param name="nextCursor">The cursor from the client request, or <see langword="null"/> for the first page.</param>
+    /// <param name="cursor">The cursor from the client request, or <see langword="null"/> for the first page.</param>
     /// <param name="toolName">The name of the tool making the request.</param>
     /// <param name="sessionId">The session/user identity.</param>
     /// <param name="requestHash">The hash of the request parameters.</param>
@@ -101,18 +101,18 @@ public static class PaginationHelper
     /// <exception cref="ArgumentException">Thrown when the cursor is invalid or expired.</exception>
     public static async ValueTask<PaginationCursorEntry?> ResolveCursorAsync(
         IPaginationCursorRegistry registry,
-        string? nextCursor,
+        string? cursor,
         string toolName,
         string sessionId,
         string requestHash,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrEmpty(nextCursor))
+        if (string.IsNullOrEmpty(cursor))
         {
             return null;
         }
 
-        var entry = await registry.GetAsync(nextCursor, toolName, sessionId, requestHash, cancellationToken);
+        var entry = await registry.GetAsync(cursor, toolName, sessionId, requestHash, cancellationToken);
 
         if (entry is null)
         {

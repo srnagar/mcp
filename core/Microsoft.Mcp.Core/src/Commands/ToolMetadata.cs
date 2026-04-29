@@ -218,7 +218,7 @@ public sealed class ToolMetadata
     /// </summary>
     /// <remarks>
     /// <para>
-    /// If <see langword="true"/>, the tool accepts an optional <c>nextCursor</c> parameter
+    /// If <see langword="true"/>, the tool accepts an optional <c>cursor</c> parameter
     /// and returns a <c>pagination</c> section in its response with a cursor for fetching
     /// subsequent pages.
     /// </para>
@@ -241,7 +241,7 @@ public sealed class ToolMetadata
     {
         Value = _supportsPagination,
         Description = _supportsPagination
-            ? "This tool returns paginated results. Pass the nextCursor value from a previous response to fetch additional pages. Confirm with the user before fetching more pages."
+            ? "This tool returns paginated results. Pass the nextCursor value from a previous response as the cursor parameter to fetch additional pages. Confirm with the user before fetching more pages."
             : "This tool does not support pagination."
     };
 

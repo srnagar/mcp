@@ -1,19 +1,5 @@
 # Pagination Design Proposal for Azure MCP Tools
 
-## Status
-
-**Draft** — April 2026
-
-## References
-
-- Internal design: [`docs/design/pagination.md`](pagination.md)
-- Tool inventory: [`docs/azure-mcp-list-tools.md`](../azure-mcp-list-tools.md)
-- [microsoft/mcp#428 — Context window overflow from unbounded tool responses](https://github.com/microsoft/mcp/issues/428)
-- [modelcontextprotocol/modelcontextprotocol#799 — Extend pagination to all tool request/response patterns](https://github.com/modelcontextprotocol/modelcontextprotocol/discussions/799)
-- [Azure MCP pagination problem statement (Gist)](https://gist.github.com/xiangyan99/32bebf596ae2903e46989422dc4ea757)
-- [MCP Specification — Pagination](https://modelcontextprotocol.io/specification/2025-03-26/server/utilities/pagination)
-- [MCP Tool Annotations](https://modelcontextprotocol.io/docs/concepts/tools#tool-annotations)
-
 ## Table of Contents
 
 - [Problem Statement](#problem-statement)
@@ -27,8 +13,8 @@
 - [Error Handling](#error-handling)
 - [Prior Art](#prior-art)
 - [Configuration](#configuration)
-- [Rollout Plan](#rollout-plan)
 - [Open Questions](#open-questions)
+- [References](#references)
 - [Appendix: Tool Inventory — Commands Requiring Pagination](#appendix-tool-inventory--commands-requiring-pagination)
 
 ---
@@ -444,7 +430,7 @@ Pagination cursors are stored in a dedicated `PaginationCursorCache` — a `Conc
 
 - **Implementation:** `PaginationCursorCache` (registered as singleton)
 - **Backing store:** `ConcurrentDictionary` with per-entry `ExpiresAt` timestamp
-- **TTL:** 2 hours (configurable via `PaginationOptions.CursorTimeToLive`)
+- **TTL:** 1 hour (configurable via `PaginationOptions.CursorTimeToLive`)
 - **Capacity:** Unbounded (practical limit: a few hundred cursors at most in typical usage)
 - **Thread-safe:** All operations are lock-free via `ConcurrentDictionary`
 - **Pros:** Zero infrastructure, zero latency, no external dependencies, works out of the box
@@ -640,40 +626,9 @@ Azure MCP's design follows the proposed extension:
 | Setting | Default | Source | Description |
 |---|---|---|---|
 | `Pagination:DefaultPageSize` | 50 | `appsettings.json` / env var | Items per page when the tool doesn't specify its own |
-| `Pagination:CursorTimeToLive` | `02:00:00` (2 hours) | `appsettings.json` / env var | How long a cursor remains valid |
+| `Pagination:CursorTimeToLive` | `01:00:00` (1 hour) | `appsettings.json` / env var | How long a cursor remains valid |
 
 Individual tools may override `DefaultPageSize` based on the expected response size. For example, tools returning complex objects (e.g., policy assignments with large JSON bodies) might use a smaller page size (e.g., 10) to stay within token limits.
-
----
-
-## Rollout Plan
-
-### Phase 1 — Foundation (current)
-
-- [x] `PaginationCursorCache` — dedicated in-memory cache for cursor entries
-- [x] `IPaginationCursorRegistry` interface and `PaginationCursorRegistry` implementation
-- [x] `PaginationCursorEntry` and `PaginationInfo` models
-- [x] `PaginationOptions` configuration
-- [ ] Integration with tool command base classes
-- [ ] First paginated tool (e.g., `acr registry list` as reference implementation)
-
-### Phase 2 — Expand coverage
-
-- [ ] Enable pagination for all 12 Resource Graph commands (simplest — offset-based)
-- [ ] Enable pagination for high-impact ARM SDK commands (`subscription list`, `group list`, `group resource list`)
-- [ ] Add `nextCursor` option to the common option definitions
-
-### Phase 3 — HTTP mode support
-
-- [ ] Integrate session ID from HTTP authentication context
-- [ ] Validate cursor security in multi-user scenarios
-
-### Phase 4 — Full coverage
-
-- [ ] Enable pagination for remaining ARM SDK commands
-- [ ] Enable pagination for data-plane SDK commands
-- [ ] Enable pagination for REST API commands
-- [ ] Evaluate pagination for service-specific protocol commands (Kusto, MySQL, Postgres)
 
 ---
 
@@ -687,6 +642,18 @@ Individual tools may override `DefaultPageSize` based on the expected response s
 
 ---
 
+## References
+
+- Internal design: [`docs/design/pagination.md`](pagination.md)
+- Tool inventory: [`docs/azure-mcp-list-tools.md`](../azure-mcp-list-tools.md)
+- [microsoft/mcp#428 — Context window overflow from unbounded tool responses](https://github.com/microsoft/mcp/issues/428)
+- [modelcontextprotocol/modelcontextprotocol#799 — Extend pagination to all tool request/response patterns](https://github.com/modelcontextprotocol/modelcontextprotocol/discussions/799)
+- [Azure MCP pagination problem statement (Gist)](https://gist.github.com/xiangyan99/32bebf596ae2903e46989422dc4ea757)
+- [MCP Specification — Pagination](https://modelcontextprotocol.io/specification/2025-03-26/server/utilities/pagination)
+- [MCP Tool Annotations](https://modelcontextprotocol.io/docs/concepts/tools#tool-annotations)
+
+---
+
 ## Appendix: Tool Inventory — Commands Requiring Pagination
 
 The following inventory catalogs all 80 Azure MCP tools that return collections, organized by the backend pagination mechanism they use. This determines the continuation state each tool must store in the cursor registry.
@@ -695,91 +662,123 @@ The following inventory catalogs all 80 Azure MCP tools that return collections,
 
 These use `BaseAzureResourceService.ExecuteResourceQueryAsync()` with a KQL `| limit N` clause. The service returns an `AreResultsTruncated` flag but no built-in continuation token. Pagination requires storing the current `offset` and re-issuing the query with `| limit N | offset M`.
 
-| Command | Current limit |
-|---|---|
-| `acr registry list` | 50 |
-| `advisor recommendation list` | 50 |
-| `appconfig account list` | 50 |
-| `containerapps list` | 50 |
-| `deviceregistry namespace list` | 50 |
-| `grafana list` | 50 |
-| `kusto cluster list` | 50 |
-| `role assignment list` | 50 |
-| `sql elastic-pool list` | 50 |
-| `storage account get` | 50 |
-| `sql db get` | 50 |
-| `workbooks list` | 50 (default), 1000 max |
-
-**Continuation state:** `{ "offset": "50" }`
+| Command | Current limit | Service called | Continuation state |
+|---|---|---|---|
+| `acr registry list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `advisor recommendation list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `appconfig account list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `containerapps list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `deviceregistry namespace list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `grafana list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `kusto cluster list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `role assignment list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `sql elastic-pool list` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `storage account get` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `sql db get` | 50 | Resource Graph | `{ "offset": "50" }` |
+| `workbooks list` | 50 (default), 1000 max | Resource Graph | `{ "offset": "50" }` |
 
 ### Azure Resource Manager SDK (44 commands)
 
 These use ARM SDK methods (`GetAllAsync()`, various `GetXxxAsync()`) that return `AsyncPageable<T>` or `IAsyncEnumerable<T>`. Currently, all pages are fully consumed with no MCP-layer limit.
 
-Representative commands include:
-
-- **Core platform:** `subscription list`, `group list`, `group resource list`, `policy assignment list`
-- **Compute & hosting:** `aks cluster get`, `aks nodepool get`, `appservice webapp get`, `compute disk/vm/vmss get`, `functionapp get`, `servicefabric managedcluster node get`, `virtualdesktop hostpool list/host list/host user-list`
-- **Storage:** `fileshares fileshare/snapshot/privateendpointconnection get`, `storagesync service/syncgroup/serverendpoint/registeredserver/cloudendpoint get`, `managedlustre fs list/importjob/autoexportjob/autoimportjob/sku get`
-- **Databases:** `cosmos list`, `mysql list` (servers), `postgres list` (servers), `redis list`, `sql server get`, `sql server entra-admin list`, `sql server firewall-rule list`
-- **Monitoring:** `applicationinsights recommendation list`, `loadtesting testresource list`, `monitor table/type list`, `monitor webtest get`, `monitor workspace list`
-- **Messaging:** `eventgrid subscription/topic list`, `eventhubs consumergroup/eventhub/namespace get`, `signalr runtime get`
-- **AI & search:** `foundryextensions openai models-list`, `search service list`
-- **Other:** `datadog monitoredresources list`
-
-**Continuation state:** `{ "continuationToken": "<SDK-provided-token>" }` via `AsPages()` enumeration.
+| Command | Current limit | Service called | Continuation state |
+|---|---|---|---|
+| `subscription list` | Unbounded | ARM SDK (`GetAllAsync`) | `{ "continuationToken": "..." }` |
+| `group list` | Unbounded | ARM SDK (`GetAllAsync`) | `{ "continuationToken": "..." }` |
+| `group resource list` | Unbounded | ARM SDK (`GetAllAsync`) | `{ "continuationToken": "..." }` |
+| `policy assignment list` | Unbounded | ARM SDK (`GetAllAsync`) | `{ "continuationToken": "..." }` |
+| `aks cluster get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `aks nodepool get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `appservice webapp get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `compute disk get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `compute vm get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `compute vmss get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `functionapp get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `servicefabric managedcluster node get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `virtualdesktop hostpool list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `virtualdesktop host list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `virtualdesktop host user-list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `fileshares fileshare get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `fileshares snapshot get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `fileshares privateendpointconnection get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `storagesync service get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `storagesync syncgroup get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `storagesync serverendpoint get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `storagesync registeredserver get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `storagesync cloudendpoint get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `managedlustre fs list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `managedlustre importjob get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `managedlustre autoexportjob get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `managedlustre autoimportjob get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `managedlustre sku get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `cosmos list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `mysql list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `postgres list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `redis list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `sql server get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `sql server entra-admin list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `sql server firewall-rule list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `applicationinsights recommendation list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `loadtesting testresource list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `monitor table list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `monitor type list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `monitor webtest get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `monitor workspace list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `eventgrid subscription list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `eventgrid topic list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `eventhubs consumergroup get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `eventhubs eventhub get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `eventhubs namespace get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `signalr runtime get` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `foundryextensions openai models-list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `search service list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
+| `datadog monitoredresources list` | Unbounded | ARM SDK | `{ "continuationToken": "..." }` |
 
 ### Data-plane SDK (12 commands)
 
 These call Azure service data-plane APIs through typed SDKs. Pagination is SDK-internal.
 
-| Command | SDK |
-|---|---|
-| `acr registry repository list` | `ContainerRegistryClient` |
-| `appconfig keyvalue get` | App Configuration SDK |
-| `storage blob get` | Blob Storage SDK |
-| `storage blob container get` | Blob Storage SDK |
-| `storage table list` | `TableServiceClient` |
-| `keyvault certificate get` | Key Vault SDK |
-| `keyvault key get` | Key Vault SDK |
-| `keyvault secret get` | Key Vault SDK |
-| `search index get` | AI Search SDK |
-| `search knowledgebase get` | AI Search SDK |
-| `search knowledgesource get` | AI Search SDK |
-| `foundryextensions knowledge index list` | Foundry SDK |
-
-**Continuation state:** `{ "continuationToken": "<SDK-specific-token>" }` (varies by SDK)
+| Command | Current limit | Service called | Continuation state |
+|---|---|---|---|
+| `acr registry repository list` | Unbounded | `ContainerRegistryClient` | `{ "continuationToken": "..." }` |
+| `appconfig keyvalue get` | Unbounded | App Configuration SDK | `{ "continuationToken": "..." }` |
+| `storage blob get` | Unbounded | Blob Storage SDK | `{ "continuationToken": "..." }` |
+| `storage blob container get` | Unbounded | Blob Storage SDK | `{ "continuationToken": "..." }` |
+| `storage table list` | Unbounded | `TableServiceClient` | `{ "continuationToken": "..." }` |
+| `keyvault certificate get` | Unbounded | Key Vault SDK | `{ "continuationToken": "..." }` |
+| `keyvault key get` | Unbounded | Key Vault SDK | `{ "continuationToken": "..." }` |
+| `keyvault secret get` | Unbounded | Key Vault SDK | `{ "continuationToken": "..." }` |
+| `search index get` | Unbounded | AI Search SDK | `{ "continuationToken": "..." }` |
+| `search knowledgebase get` | Unbounded | AI Search SDK | `{ "continuationToken": "..." }` |
+| `search knowledgesource get` | Unbounded | AI Search SDK | `{ "continuationToken": "..." }` |
+| `foundryextensions knowledge index list` | Unbounded | Foundry SDK | `{ "continuationToken": "..." }` |
 
 ### REST API (8 commands)
 
 These make direct HTTP calls. Pagination varies by endpoint.
 
-| Command | Pagination mechanism |
-|---|---|
-| `monitor activitylog list` | `nextLink` URL |
-| `appservice webapp diagnostic list` | Direct HTTP (planned SDK migration) |
-| `marketplace product list` | `$skiptoken` |
-| `pricing get` | API pagination |
-| `quota region availability list` | Computed, no pagination |
-| `resourcehealth availability-status get` | REST API pagination |
-| `resourcehealth health-events list` | OData `nextLink` |
-| `loadtesting testrun get` | SDK enumeration |
-
-**Continuation state:** `{ "nextLink": "https://..." }` or `{ "skipToken": "..." }`
+| Command | Current limit | Service called | Continuation state |
+|---|---|---|---|
+| `monitor activitylog list` | Unbounded | Monitor REST API | `{ "nextLink": "https://..." }` |
+| `appservice webapp diagnostic list` | Unbounded | App Service REST API | `{ "nextLink": "https://..." }` |
+| `marketplace product list` | Unbounded | Marketplace REST API | `{ "skipToken": "..." }` |
+| `pricing get` | Unbounded | Pricing REST API | `{ "nextLink": "https://..." }` |
+| `quota region availability list` | Unbounded | Quota REST API | None (computed, no pagination) |
+| `resourcehealth availability-status get` | Unbounded | Resource Health REST API | `{ "nextLink": "https://..." }` |
+| `resourcehealth health-events list` | Unbounded | Resource Health REST API | `{ "nextLink": "https://..." }` |
+| `loadtesting testrun get` | Unbounded | Load Testing REST API | `{ "continuationToken": "..." }` |
 
 ### Service-specific protocol (3 commands)
 
-| Command | Protocol | Notes |
-|---|---|---|
-| `kusto database list` | Kusto `.show` command | Full result set, no pagination |
-| `kusto table list` | Kusto `.show` command | Full result set, no pagination |
-| `mysql database/table list` | SQL query | 10,000 hardcoded limit |
-| `postgres database/table list` | SQL query | No explicit limit |
-
-These commands typically return small result sets and may not require pagination initially. They can be excluded from Phase 1.
+| Command | Current limit | Service called | Continuation state |
+|---|---|---|---|
+| `kusto database list` | Unbounded | Kusto `.show` command | None (full result set) |
+| `kusto table list` | Unbounded | Kusto `.show` command | None (full result set) |
+| `mysql database/table list` | 10,000 | MySQL SQL query | None (hardcoded limit) |
+| `postgres database/table list` | Unbounded | PostgreSQL SQL query | None (no explicit limit) |
 
 ### Static/computed (1 command)
 
-| Command | Notes |
-|---|---|
-| `functions language list` | Static manifest, no pagination needed |
+| Command | Current limit | Service called | Continuation state |
+|---|---|---|---|
+| `functions language list` | N/A | Static manifest | None (no pagination needed) |

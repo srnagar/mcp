@@ -18,48 +18,32 @@ using Microsoft.Mcp.Core.Services.Pagination;
 
 namespace Azure.Mcp.Tools.Monitor.Commands.ActivityLog;
 
-public sealed class ActivityLogListCommand(
-    ILogger<ActivityLogListCommand> logger,
-    IPaginationCursorRegistry cursorRegistry,
-    IOptions<PaginationOptions> paginationOptions)
-    : SubscriptionCommand<ActivityLogListOptions>
-{
-    private const string CommandTitle = "List Activity Logs";
-    internal record ActivityLogListCommandResult(
-        List<ActivityLogEventData> ActivityLogs,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        PaginationInfo? Pagination);
-
-    private readonly IPaginationCursorRegistry _cursorRegistry = cursorRegistry;
-    private readonly PaginationOptions _paginationOptions = paginationOptions.Value;
-
-    public override string Id => "ffc0ed72-0622-4a27-bfd8-6df9b83adce8";
-
-    public override string Name => "list";
-
-    public override string Description =>
-        $"""
+[CommandMetadata(
+    Id = "ffc0ed72-0622-4a27-bfd8-6df9b83adce8",
+    Name = "list",
+    Title = "List Activity Logs",
+    Description = """
         Always use this tool if user is asking for activity logs for a resource.
         Lists activity logs for the specified Azure resource over the given prior number of hours.
         This command retrieves activity logs to help understand resource deployment history, modification activities, and access patterns.
         Returns activity log events with details including timestamp, operation name, status, and caller information. should be called to help retrieve information about why a resource failed to deploy or may not be working.
-        Returns up to {_paginationOptions.DefaultPageSize} items per request. If pagination.nextCursor is non-null in the response,
-        more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned
-        nextCursor value as the cursor parameter. Always confirm with the user before fetching additional pages.
-        """;
+        """,
+    Destructive = false,
+    Idempotent = true,
+    OpenWorld = false,
+    ReadOnly = true,
+    Secret = false,
+    LocalRequired = false,
+    SupportsPagination = true)]
+public sealed class ActivityLogListCommand(ILogger<ActivityLogListCommand> logger, IMonitorService monitorService, IPaginationCursorRegistry cursorRegistry, IOptions<PaginationOptions> paginationOptions)
+    : SubscriptionCommand<ActivityLogListOptions>
+{
+    private readonly ILogger<ActivityLogListCommand> _logger = logger;
+    private readonly IMonitorService _monitorService = monitorService;
+    private readonly IPaginationCursorRegistry _cursorRegistry = cursorRegistry;
+    private readonly PaginationOptions _paginationOptions = paginationOptions.Value;
 
-    public override string Title => CommandTitle;
-
-    public override ToolMetadata Metadata => new()
-    {
-        Destructive = false,
-        OpenWorld = false,
-        Idempotent = true,
-        ReadOnly = true,
-        Secret = false,
-        LocalRequired = false,
-        SupportsPagination = true
-    };
+    internal record ActivityLogListCommandResult(List<ActivityLogEventData> ActivityLogs);
 
     protected override void RegisterOptions(Command command)
     {
@@ -163,7 +147,8 @@ public sealed class ActivityLogListCommand(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex,
+            // Log error with all relevant context
+            _logger.LogError(ex,
                 "Error listing activity logs. ResourceName: {ResourceName}, ResourceType: {ResourceType}, Hours: {Hours}.",
                 options.ResourceName, options.ResourceType, options.Hours);
             HandleException(context, ex);

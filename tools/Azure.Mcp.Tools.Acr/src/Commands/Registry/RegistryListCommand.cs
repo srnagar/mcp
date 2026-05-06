@@ -13,44 +13,28 @@ using System.Text.Json.Serialization;
 
 namespace Azure.Mcp.Tools.Acr.Commands.Registry;
 
-public sealed class RegistryListCommand(
-    ILogger<RegistryListCommand> logger,
-    IAcrService acrService,
-    IPaginationCursorRegistry cursorRegistry,
-    IOptions<PaginationOptions> paginationOptions) : BaseAcrCommand<RegistryListOptions>
+[CommandMetadata(
+    Id = "796f8778-2fa7-4343-87ad-06bdcf6b296c",
+    Name = "list",
+    Title = "List Container Registries",
+    Description = """
+        List Azure Container Registries in a subscription. Optionally filter by resource group. Each registry result
+        includes: name, location, loginServer, skuName, skuTier. If no registries are found the tool returns null results
+        (consistent with other list commands).
+        """,
+    Destructive = false,
+    Idempotent = true,
+    OpenWorld = false,
+    ReadOnly = true,
+    Secret = false,
+    LocalRequired = false,
+    SupportsPagination = true)]
+public sealed class RegistryListCommand(ILogger<RegistryListCommand> logger, IAcrService acrService, IPaginationCursorRegistry cursorRegistry, IOptions<PaginationOptions> paginationOptions) : BaseAcrCommand<RegistryListOptions>
 {
-    private const string CommandTitle = "List Container Registries";
     private readonly ILogger<RegistryListCommand> _logger = logger;
     private readonly IAcrService _acrService = acrService;
     private readonly IPaginationCursorRegistry _cursorRegistry = cursorRegistry;
     private readonly PaginationOptions _paginationOptions = paginationOptions.Value;
-
-    public override string Id => "796f8778-2fa7-4343-87ad-06bdcf6b296c";
-
-    public override string Name => "list";
-
-    public override string Description =>
-        $"""
-        List Azure Container Registries in a subscription. Optionally filter by resource group. Each registry result
-        includes: name, location, loginServer, skuName, skuTier. If no registries are found the tool returns null results
-        (consistent with other list commands).
-        Returns up to {_paginationOptions.DefaultPageSize} items per request. If pagination.nextCursor is non-null in the response,
-        more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned
-        nextCursor value as the cursor parameter. Always confirm with the user before fetching additional pages.
-        """;
-
-    public override string Title => CommandTitle;
-
-    public override ToolMetadata Metadata => new()
-    {
-        Destructive = false,
-        Idempotent = true,
-        OpenWorld = false,
-        ReadOnly = true,
-        LocalRequired = false,
-        Secret = false,
-        SupportsPagination = true
-    };
 
     protected override void RegisterOptions(Command command)
     {

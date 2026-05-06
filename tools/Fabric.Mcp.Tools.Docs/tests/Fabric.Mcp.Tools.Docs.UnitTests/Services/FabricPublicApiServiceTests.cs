@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
-namespace Fabric.Mcp.Tools.Docs.Tests.Services;
+namespace Fabric.Mcp.Tools.Docs.UnitTests.Services;
 
 public class FabricPublicApiServiceTests
 {
@@ -50,11 +50,11 @@ public class FabricPublicApiServiceTests
         var expectedDefinitions = new Dictionary<string, string> { { "definitions.json", "{ \"definitions\": {} }" } };
 
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/swagger.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(expectedSpec));
+            .Returns(expectedSpec);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/", cancellationToken: Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new[] { "definitions.json" }));
+            .Returns(["definitions.json"]);
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/definitions.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(expectedDefinitions["definitions.json"]));
+            .Returns(expectedDefinitions["definitions.json"]);
 
         // Act
         var result = await _service.GetWorkloadPublicApis(workload, TestContext.Current.CancellationToken);
@@ -74,15 +74,15 @@ public class FabricPublicApiServiceTests
         var expectedSpec = "{ \"swagger\": \"2.0\" }";
 
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/platform/swagger.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(expectedSpec));
+            .Returns(expectedSpec);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/platform/", cancellationToken: Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new[] { "definitions/" }));
+            .Returns(["definitions/"]);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/platform/definitions/", cancellationToken: Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new[] { "model1.json", "model2.json" }));
+            .Returns(["model1.json", "model2.json"]);
         _resourceProvider.GetResource("definitions/model1.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult("{ \"model1\": {} }"));
+            .Returns("{ \"model1\": {} }");
         _resourceProvider.GetResource("definitions/model2.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult("{ \"model2\": {} }"));
+            .Returns("{ \"model2\": {} }");
 
         // Act
         var result = await _service.GetWorkloadPublicApis(workload, TestContext.Current.CancellationToken);
@@ -102,9 +102,9 @@ public class FabricPublicApiServiceTests
         var workload = "notebook";
 
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/swagger.json", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(string.Empty));
+            .Returns(string.Empty);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/", cancellationToken: Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(Array.Empty<string>()));
+            .Returns(Array.Empty<string>());
 
         // Act
         var result = await _service.GetWorkloadPublicApis(workload, TestContext.Current.CancellationToken);
@@ -137,7 +137,7 @@ public class FabricPublicApiServiceTests
         // Arrange
         var expectedWorkloads = new[] { "notebook", "report", "platform" };
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/", ResourceType.Directory, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(expectedWorkloads));
+            .Returns(expectedWorkloads);
 
         // Act
         var result = await _service.ListWorkloadsAsync(TestContext.Current.CancellationToken);
@@ -170,13 +170,13 @@ public class FabricPublicApiServiceTests
         var expectedFiles = new[] { "example1.json", "example2.json" };
 
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/", ResourceType.File, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(expectedFiles));
+            .Returns(expectedFiles);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/", ResourceType.Directory, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(Array.Empty<string>()));
+            .Returns(Array.Empty<string>());
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/examples/example1.json", TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult("{ \"example1\": \"content\" }"));
+            .Returns("{ \"example1\": \"content\" }");
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/examples/example2.json", TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult("{ \"example2\": \"content\" }"));
+            .Returns("{ \"example2\": \"content\" }");
 
         // Act
         var result = await _service.GetWorkloadExamplesAsync(workloadType, TestContext.Current.CancellationToken);
@@ -196,18 +196,18 @@ public class FabricPublicApiServiceTests
         var workloadType = "notebook";
 
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/", ResourceType.File, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(new[] { "root.json" }));
+            .Returns(["root.json"]);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/", ResourceType.Directory, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(new[] { "subdir1" }));
+            .Returns(["subdir1"]);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/subdir1/", ResourceType.File, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(new[] { "sub1.json" }));
+            .Returns(["sub1.json"]);
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/subdir1/", ResourceType.Directory, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(Array.Empty<string>()));
+            .Returns(Array.Empty<string>());
 
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/examples/root.json", TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult("{ \"root\": \"content\" }"));
+            .Returns("{ \"root\": \"content\" }");
         _resourceProvider.GetResource("fabric-rest-api-specs/contents/notebook/examples/subdir1/sub1.json", TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult("{ \"sub1\": \"content\" }"));
+            .Returns("{ \"sub1\": \"content\" }");
 
         // Act
         var result = await _service.GetWorkloadExamplesAsync(workloadType, TestContext.Current.CancellationToken);
@@ -225,9 +225,9 @@ public class FabricPublicApiServiceTests
         var workloadType = "notebook";
 
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/", ResourceType.File, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(Array.Empty<string>()));
+            .Returns(Array.Empty<string>());
         _resourceProvider.ListResourcesInPath("fabric-rest-api-specs/contents/notebook/examples/", ResourceType.Directory, TestContext.Current.CancellationToken)
-            .Returns(Task.FromResult(Array.Empty<string>()));
+            .Returns(Array.Empty<string>());
 
         // Act
         var result = await _service.GetWorkloadExamplesAsync(workloadType, TestContext.Current.CancellationToken);
@@ -260,6 +260,8 @@ public class FabricPublicApiServiceTests
     [InlineData("digitalTwinBuilder")]
     [InlineData("graphQLApi")]
     [InlineData("semanticModel")]
+    [InlineData("sparkjobdefinition")]
+    [InlineData("mirroredAzureDatabricksCatalog")]
     public void GetFabricWorkloadItemDefinition_WithCamelCaseWorkload_ReturnsDefinition(string workloadType)
     {
         // Act
@@ -270,10 +272,12 @@ public class FabricPublicApiServiceTests
     }
 
     [Theory]
-    [InlineData("notebook", "item-definitions/notebook-definition\\.md")]
-    [InlineData("kqlDatabase", "item-definitions/kql-?database-definition\\.md")]
-    [InlineData("cosmosDbDatabase", "item-definitions/cosmos-?db-?database-definition\\.md")]
-    [InlineData("graphQLApi", "item-definitions/graph-?q-?l-?api-definition\\.md")]
+    [InlineData("notebook", "item-definitions/n-?o-?t-?e-?b-?o-?o-?k-definition\\.md")]
+    [InlineData("kqlDatabase", "item-definitions/k-?q-?l[-a-z]*?d-?a-?t-?a-?b-?a-?s-?e-definition\\.md")]
+    [InlineData("cosmosDbDatabase", "item-definitions/c-?o-?s-?m-?o-?s[-a-z]*?d-?b[-a-z]*?d-?a-?t-?a-?b-?a-?s-?e-definition\\.md")]
+    [InlineData("graphQLApi", "item-definitions/g-?r-?a-?p-?h[-a-z]*?q[-a-z]*?l[-a-z]*?a-?p-?i-definition\\.md")]
+    [InlineData("sparkjobdefinition", "item-definitions/s-?p-?a-?r-?k-?j-?o-?b-definition\\.md")]
+    [InlineData("mirroredAzureDatabricksCatalog", "item-definitions/m-?i-?r-?r-?o-?r-?e-?d[-a-z]*?a-?z-?u-?r-?e[-a-z]*?d-?a-?t-?a-?b-?r-?i-?c-?k-?s[-a-z]*?c-?a-?t-?a-?l-?o-?g-definition\\.md")]
     public void BuildItemDefinitionPattern_ConvertsCorrectly(string workloadType, string expectedPattern)
     {
         // Act

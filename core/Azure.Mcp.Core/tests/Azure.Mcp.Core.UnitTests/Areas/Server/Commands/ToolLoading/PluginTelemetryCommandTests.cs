@@ -27,7 +27,7 @@ public class PluginTelemetryCommandTests
 
     public PluginTelemetryCommandTests()
     {
-        var serverAssembly = typeof(Azure.Mcp.Server.Program).Assembly;
+        var serverAssembly = typeof(Mcp.Server.Program).Assembly;
 
         _fileReferenceProvider = new ResourcePluginFileReferenceAllowlistProvider(
             NullLogger<ResourcePluginFileReferenceAllowlistProvider>.Instance,
@@ -49,7 +49,7 @@ public class PluginTelemetryCommandTests
             DisplayName = "Azure MCP Server (Test)",
             Version = "1.0.0-test"
         }));
-        services.AddSingleton<ITelemetryService>(Substitute.For<ITelemetryService>());
+        services.AddSingleton(Substitute.For<ITelemetryService>());
         services.AddSingleton<ILogger<CommandFactory>>(NullLogger<CommandFactory>.Instance);
         services.AddSingleton<ILogger<ServiceInfoCommand>>(NullLogger<ServiceInfoCommand>.Instance);
         services.AddSingleton(_fileReferenceProvider);
@@ -63,10 +63,7 @@ public class PluginTelemetryCommandTests
         var serviceProvider = services.BuildServiceProvider();
         _commandFactory = serviceProvider.GetRequiredService<ICommandFactory>();
 
-        _command = new PluginTelemetryCommand(
-            _fileReferenceProvider,
-            _skillNameProvider,
-            serviceProvider);
+        _command = new PluginTelemetryCommand(_fileReferenceProvider, _skillNameProvider);
     }
 
     [Theory]

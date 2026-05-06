@@ -1,52 +1,23 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System.CommandLine;
 using System.Net;
-using System.Text.Json;
 using Azure.Mcp.Tools.Monitor.Commands;
 using Azure.Mcp.Tools.Monitor.Commands.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Models.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Services;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Mcp.Core.Models.Command;
 using Microsoft.Mcp.Core.Options;
-using Microsoft.Extensions.Options;
-using Microsoft.Mcp.Core.Models.Pagination;
-using Microsoft.Mcp.Core.Services.Pagination;
+using Microsoft.Mcp.Tests.Client;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Xunit;
 
 namespace Azure.Mcp.Tools.Monitor.UnitTests.ActivityLog;
 
-public sealed class ActivityLogListCommandTests
+public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityLogListCommand, IMonitorService>
 {
-    private readonly IServiceProvider _serviceProvider;
-    private readonly IMonitorService _monitorService;
-    private readonly ILogger<ActivityLogListCommand> _logger;
-    private readonly ActivityLogListCommand _command;
-    private readonly CommandContext _context;
-    private readonly Command _commandDefinition;
-
     private const string _knownSubscription = "knownSubscription";
     private const string _knownResourceName = "myResource";
-
-    public ActivityLogListCommandTests()
-    {
-        _monitorService = Substitute.For<IMonitorService>();
-        _logger = Substitute.For<ILogger<ActivityLogListCommand>>();
-
-        var collection = new ServiceCollection();
-        collection.AddSingleton(_monitorService);
-        _serviceProvider = collection.BuildServiceProvider();
-
-        var cursorRegistry = Substitute.For<IPaginationCursorRegistry>();
-        var paginationOptions = Microsoft.Extensions.Options.Options.Create(new PaginationOptions { Enabled = true });
-        _command = new(_logger, cursorRegistry, paginationOptions);
-        _context = new(_serviceProvider);
-        _commandDefinition = _command.GetCommand();
-    }
 
     [Theory]
     [InlineData($"--subscription {_knownSubscription} --resource-name {_knownResourceName}", true)]
@@ -68,29 +39,28 @@ public sealed class ActivityLogListCommandTests
                     OperationName = new() { LocalizedValue = "Create Storage Account", Value = "Microsoft.Storage/storageAccounts/write" },
                     Level = ActivityLogEventLevel.Informational,
                     EventTimestamp = "2023-01-01T00:00:00Z",
-                    Properties = new Dictionary<string, object>()
+                    Properties = []
                 }
             };
-            _monitorService.ListActivityLogsPaged(
-            Arg.Any<string>(),
-            Arg.Any<string>(),
-            Arg.Any<string>(),
-            Arg.Any<string>(),
-            Arg.Any<double>(),
-            Arg.Any<ActivityLogEventLevel?>(),
-            Arg.Any<int>(),
-            Arg.Any<string>(),
-            Arg.Any<string>(),
-            Arg.Any<RetryPolicyOptions>(),
-            Arg.Any<CancellationToken>())
-                .Returns(new ActivityLogPagedResult(testActivityLogs, null));
+            Service.ListActivityLogs(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<double>(),
+                Arg.Any<ActivityLogEventLevel?>(),
+                Arg.Any<int>(),
+                Arg.Any<string>(),
+                Arg.Any<RetryPolicyOptions>(),
+                Arg.Any<CancellationToken>())
+                .Returns(testActivityLogs);
         }
 
         // Act
-        var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse(args), TestContext.Current.CancellationToken);
+        var response = await ExecuteCommandAsync(args);
 
         // Assert
-        Assert.Equal(shouldSucceed ? (HttpStatusCode)200 : (HttpStatusCode)400, response.Status);
+        Assert.Equal(shouldSucceed ? HttpStatusCode.OK : HttpStatusCode.BadRequest, response.Status);
         if (shouldSucceed)
         {
             Assert.NotNull(response.Results);
@@ -115,7 +85,7 @@ public sealed class ActivityLogListCommandTests
                 OperationName = new() { LocalizedValue = "Create Storage Account", Value = "Microsoft.Storage/storageAccounts/write" },
                 Level = ActivityLogEventLevel.Informational,
                 EventTimestamp = "2023-01-01T00:00:00Z",
-                Properties = new Dictionary<string, object>()
+                Properties = []
             },
             new()
             {
@@ -124,11 +94,11 @@ public sealed class ActivityLogListCommandTests
                 OperationName = new() { LocalizedValue = "Update Storage Account", Value = "Microsoft.Storage/storageAccounts/write" },
                 Level = ActivityLogEventLevel.Warning,
                 EventTimestamp = "2023-01-01T01:00:00Z",
-                Properties = new Dictionary<string, object>()
+                Properties = []
             }
         };
 
-        _monitorService.ListActivityLogsPaged(
+        Service.ListActivityLogs(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -143,14 +113,13 @@ public sealed class ActivityLogListCommandTests
             .Returns(new ActivityLogPagedResult(expectedActivityLogs, null));
 
         // Act
-        var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse($"--subscription {_knownSubscription} --resource-name {_knownResourceName}"), TestContext.Current.CancellationToken);
+        var response = await ExecuteCommandAsync(
+            "--subscription", _knownSubscription,
+            "--resource-name", _knownResourceName);
 
         // Assert
-        Assert.Equal((HttpStatusCode)200, response.Status);
-        Assert.NotNull(response.Results);
-
         // Verify the mock was called
-        await _monitorService.Received(1).ListActivityLogsPaged(
+        await Service.Received(1).ListActivityLogs(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -163,10 +132,8 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>());
 
-        var json = JsonSerializer.Serialize(response.Results);
-        var result = JsonSerializer.Deserialize(json, MonitorJsonContext.Default.ActivityLogListCommandResult);
+        var result = ValidateAndDeserializeResponse(response, MonitorJsonContext.Default.ActivityLogListCommandResult);
 
-        Assert.NotNull(result);
         Assert.Equal(expectedActivityLogs.Count, result.ActivityLogs.Count);
         Assert.Equal(expectedActivityLogs[0].Description, result.ActivityLogs[0].Description);
         Assert.Equal(expectedActivityLogs[0].Level, result.ActivityLogs[0].Level);
@@ -178,7 +145,7 @@ public sealed class ActivityLogListCommandTests
     public async Task ExecuteAsync_ReturnsEmptyListWhenNoActivityLogs()
     {
         // Arrange
-        _monitorService.ListActivityLogsPaged(
+        Service.ListActivityLogs(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -190,19 +157,16 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(new ActivityLogPagedResult([], null));
+            .Returns([]);
 
         // Act
-        var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse($"--subscription {_knownSubscription} --resource-name {_knownResourceName}"), TestContext.Current.CancellationToken);
+        var response = await ExecuteCommandAsync(
+            "--subscription", _knownSubscription,
+            "--resource-name", _knownResourceName);
 
         // Assert
-        Assert.Equal((HttpStatusCode)200, response.Status);
-        Assert.NotNull(response.Results);
+        var result = ValidateAndDeserializeResponse(response, MonitorJsonContext.Default.ActivityLogListCommandResult);
 
-        var json = JsonSerializer.Serialize(response.Results);
-        var result = JsonSerializer.Deserialize(json, MonitorJsonContext.Default.ActivityLogListCommandResult);
-
-        Assert.NotNull(result);
         Assert.Empty(result.ActivityLogs);
     }
 
@@ -210,7 +174,7 @@ public sealed class ActivityLogListCommandTests
     public async Task ExecuteAsync_HandlesServiceErrors()
     {
         // Arrange
-        _monitorService.ListActivityLogsPaged(
+        Service.ListActivityLogs(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -222,10 +186,12 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<ActivityLogPagedResult>(new Exception("Test error")));
+            .ThrowsAsync(new Exception("Test error"));
 
         // Act
-        var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse($"--subscription {_knownSubscription} --resource-name {_knownResourceName}"), TestContext.Current.CancellationToken);
+        var response = await ExecuteCommandAsync(
+            "--subscription", _knownSubscription,
+            "--resource-name", _knownResourceName);
 
         // Assert
         Assert.Equal((HttpStatusCode)500, response.Status);
@@ -242,7 +208,7 @@ public sealed class ActivityLogListCommandTests
         // Arrange
         var args = $"--subscription {_knownSubscription} {partialArgs}";
 
-        _monitorService.ListActivityLogsPaged(
+        Service.ListActivityLogs(
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<string>(),
@@ -254,7 +220,7 @@ public sealed class ActivityLogListCommandTests
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(new ActivityLogPagedResult(
+            .Returns(
             [
                 new()
                 {
@@ -263,14 +229,14 @@ public sealed class ActivityLogListCommandTests
                     OperationName = new() { LocalizedValue = "Create Storage Account", Value = "Microsoft.Storage/storageAccounts/write" },
                     Level = ActivityLogEventLevel.Informational,
                     EventTimestamp = "2023-01-01T00:00:00Z",
-                    Properties = new Dictionary<string, object>()
+                    Properties = []
                 }
-            ], null));
+            ]);
 
         // Act
-        var response = await _command.ExecuteAsync(_context, _commandDefinition.Parse(args), TestContext.Current.CancellationToken);
+        var response = await ExecuteCommandAsync(args);
 
         // Assert
-        Assert.Equal(shouldSucceed ? (HttpStatusCode)200 : (HttpStatusCode)400, response.Status);
+        Assert.Equal(shouldSucceed ? HttpStatusCode.OK : HttpStatusCode.BadRequest, response.Status);
     }
 }

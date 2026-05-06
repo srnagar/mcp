@@ -20,7 +20,7 @@ public static class CommandHelper
     /// <returns>True if a subscription is available, false otherwise.</returns>
     public static bool HasSubscriptionAvailable(CommandResult commandResult)
     {
-        if (commandResult.HasOptionResult(OptionDefinitions.Common.Subscription.Name))
+        if (commandResult.HasOptionResult(OptionDefinitions.Common.Subscription))
         {
             return true;
         }
@@ -31,7 +31,7 @@ public static class CommandHelper
     public static string? GetSubscription(ParseResult parseResult)
     {
         // Get subscription from command line option or fallback to default subscription
-        var subscriptionValue = parseResult.GetValueOrDefault<string>(OptionDefinitions.Common.Subscription.Name);
+        var subscriptionValue = parseResult.GetValueOrDefault(OptionDefinitions.Common.Subscription);
 
         if (!string.IsNullOrEmpty(subscriptionValue) && !IsPlaceholder(subscriptionValue))
         {
@@ -52,7 +52,7 @@ public static class CommandHelper
     public static string? GetDefaultSubscription()
     {
         // Primary: Azure CLI profile (set via 'az account set') - cached to avoid repeated file I/O
-        var profileDefault = s_profileDefault.Value;
+        var profileDefault = GetProfileSubscription();
         if (!string.IsNullOrEmpty(profileDefault))
         {
             return profileDefault;
@@ -61,6 +61,8 @@ public static class CommandHelper
         // Fallback: AZURE_SUBSCRIPTION_ID environment variable (cheap, not cached)
         return EnvironmentHelpers.GetAzureSubscriptionId();
     }
+
+    internal static string? GetProfileSubscription() => s_profileDefault.Value;
 
     private static bool IsPlaceholder(string value) => value.Contains("subscription") || value.Contains("default");
 }

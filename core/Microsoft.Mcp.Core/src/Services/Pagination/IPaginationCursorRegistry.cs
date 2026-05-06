@@ -27,7 +27,7 @@ public interface IPaginationCursorRegistry
         string toolName,
         string sessionId,
         string requestHash,
-        Dictionary<string, string> continuationState,
+        ContinuationState continuationState,
         CancellationToken cancellationToken = default);
 
     /// <summary>

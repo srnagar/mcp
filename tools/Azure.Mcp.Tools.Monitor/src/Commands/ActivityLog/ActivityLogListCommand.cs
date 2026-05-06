@@ -110,7 +110,7 @@ public sealed class ActivityLogListCommand(
 
                 if (cursorEntry is not null)
                 {
-                    cursorEntry.ContinuationState.TryGetValue("nextLink", out nextLink);
+                    nextLink = cursorEntry.ContinuationState.NextLink;
                 }
 
                 var result = await service.ListActivityLogsPaged(
@@ -129,9 +129,9 @@ public sealed class ActivityLogListCommand(
                 string? nextCursor = null;
                 if (!string.IsNullOrEmpty(result.NextLink))
                 {
-                    var continuationState = new Dictionary<string, string>
+                    var continuationState = new ContinuationState
                     {
-                        ["nextLink"] = result.NextLink
+                        NextLink = result.NextLink
                     };
 
                     nextCursor = await _cursorRegistry.CreateAsync(

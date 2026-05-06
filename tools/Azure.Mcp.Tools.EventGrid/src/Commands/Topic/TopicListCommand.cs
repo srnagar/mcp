@@ -90,7 +90,7 @@ public sealed class TopicListCommand(
 
                 if (cursorEntry is not null)
                 {
-                    cursorEntry.ContinuationState.TryGetValue("continuationToken", out armContinuationToken);
+                    armContinuationToken = cursorEntry.ContinuationState.ContinuationToken;
                 }
 
                 var result = await _eventGridService.GetTopicsPagedAsync(
@@ -105,9 +105,9 @@ public sealed class TopicListCommand(
                 string? nextCursor = null;
                 if (!string.IsNullOrEmpty(result.ContinuationToken))
                 {
-                    var continuationState = new Dictionary<string, string>
+                    var continuationState = new ContinuationState
                     {
-                        ["continuationToken"] = result.ContinuationToken
+                        ContinuationToken = result.ContinuationToken
                     };
 
                     nextCursor = await _cursorRegistry.CreateAsync(

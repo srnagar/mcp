@@ -90,7 +90,7 @@ public sealed class RegistryListCommand(
                     _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
 
                 if (cursorEntry is not null &&
-                    cursorEntry.ContinuationState.TryGetValue("offset", out var offsetStr) &&
+                    cursorEntry.ContinuationState.Offset is { } offsetStr &&
                     int.TryParse(offsetStr, out var offset))
                 {
                     skip = offset;
@@ -110,9 +110,9 @@ public sealed class RegistryListCommand(
                 string? nextCursor = null;
                 if (registries?.AreResultsTruncated == true)
                 {
-                    var continuationState = new Dictionary<string, string>
+                    var continuationState = new ContinuationState
                     {
-                        ["offset"] = registries.NextOffset.ToString()
+                        Offset = registries.NextOffset.ToString()
                     };
 
                     nextCursor = await _cursorRegistry.CreateAsync(

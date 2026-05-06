@@ -28,14 +28,11 @@ public sealed class PaginationCursorEntry
     public required string RequestHash { get; init; }
 
     /// <summary>
-    /// Gets or sets the backend-specific continuation state.
-    /// Keys and values depend on the pagination backend:
-    /// Resource Graph: { "offset": "50" },
-    /// ARM SDK: { "continuationToken": "..." },
-    /// REST API: { "nextLink": "https://..." },
-    /// Marketplace: { "skipToken": "..." }.
+    /// Gets or sets the backend-specific continuation state for fetching the next page.
+    /// Restricted to known continuation types (ContinuationToken, Offset, SkipToken, NextLink)
+    /// to prevent arbitrary data from being stored in cursor entries.
     /// </summary>
-    public required Dictionary<string, string> ContinuationState { get; set; }
+    public required ContinuationState ContinuationState { get; set; }
 
     /// <summary>
     /// Gets the timestamp when this cursor was created. Used for diagnostics.

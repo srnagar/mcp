@@ -25,7 +25,7 @@ public sealed class PaginationCursorRegistry(
         string toolName,
         string sessionId,
         string requestHash,
-        Dictionary<string, string> continuationState,
+        ContinuationState continuationState,
         CancellationToken cancellationToken = default)
     {
         var cursorId = Guid.NewGuid().ToString("N");

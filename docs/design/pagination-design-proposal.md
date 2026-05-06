@@ -223,10 +223,7 @@ When a tool receives a request without `cursor` (or with `cursor = null`):
        toolName: "azmcp_acr_registry_list",
        sessionId: context.SessionId,
        requestHash: ComputeRequestHash(options),
-       continuationState: new Dictionary<string, string>
-       {
-           ["offset"] = "50"  // or continuationToken, nextLink, etc.
-       },
+       continuationState: new ContinuationState { Offset = "50" },
        cancellationToken);
    ```
 3. The cursor ID (an opaque GUID like `a1b2c3d4e5f6...`) is included in the response as `pagination.nextCursor`.
@@ -241,20 +238,37 @@ public sealed class PaginationCursorEntry
     public required string ToolName { get; init; }
     public required string SessionId { get; init; }
     public required string RequestHash { get; init; }
-    public required Dictionary<string, string> ContinuationState { get; set; }
+    public required ContinuationState ContinuationState { get; set; }
     public DateTimeOffset CreatedAt { get; init; }
 }
 ```
+
+The `ContinuationState` is a strongly-typed record that restricts the allowed continuation types to prevent
+arbitrary data from being stored in cursor entries:
+
+```csharp
+public sealed class ContinuationState
+{
+    public string? ContinuationToken { get; init; }  // ARM SDK (AsyncPageable)
+    public string? Offset { get; init; }              // Resource Graph (KQL offset)
+    public string? SkipToken { get; init; }           // OData/Marketplace ($skiptoken)
+    public string? NextLink { get; init; }            // REST API (nextLink URL)
+}
+```
+
+Exactly one property is set per cursor entry, corresponding to the pagination mechanism of the underlying Azure
+service. This design ensures that only known, well-defined continuation values can be stored — preventing
+security risks from arbitrary data being placed in the cursor cache (e.g., cross-user data leakage).
 
 **Key design decisions:**
 
 - **Cursor ID format:** Opaque GUID (`Guid.NewGuid().ToString("N")`) — reveals no internal state and is not guessable.
 - **Request hash validation:** SHA256 of the canonical request parameters (sorted, serialized, excluding `cursor`). Stored alongside the cursor and validated on retrieval to ensure a cursor cannot be reused with different query parameters.
-- **ContinuationState:** A generic `Dictionary<string, string>` that accommodates all Azure pagination backends:
-  - Resource Graph: `{ "offset": "50" }`
-  - ARM SDK: `{ "continuationToken": "<base64-token>" }`
-  - REST API: `{ "nextLink": "https://management.azure.com/..." }`
-  - Marketplace: `{ "skipToken": "<opaque-token>" }`
+- **ContinuationState:** A closed, strongly-typed model (not an open dictionary). Only four known continuation types are allowed:
+  - Resource Graph: `new ContinuationState { Offset = "50" }`
+  - ARM SDK: `new ContinuationState { ContinuationToken = "<base64-token>" }`
+  - REST API: `new ContinuationState { NextLink = "https://management.azure.com/..." }`
+  - Marketplace: `new ContinuationState { SkipToken = "<opaque-token>" }`
 - **TTL:** Configurable via `PaginationOptions.CursorTimeToLive` (default: 1 hour). The cursor is set with an absolute expiration in the cache.
 
 ### Cursor retrieval and validation

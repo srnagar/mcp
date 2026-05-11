@@ -7,7 +7,10 @@ using Azure.Mcp.Tools.Acr.Commands;
 using Azure.Mcp.Tools.Acr.Commands.Registry;
 using Azure.Mcp.Tools.Acr.Models;
 using Azure.Mcp.Tools.Acr.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Options;
+using Microsoft.Mcp.Core.Services.Pagination;
 using Microsoft.Mcp.Tests.Client;
 using Microsoft.Mcp.Tests.Helpers;
 using NSubstitute;
@@ -18,6 +21,11 @@ namespace Azure.Mcp.Tools.Acr.UnitTests.Registry;
 
 public class RegistryListCommandTests : CommandUnitTestsBase<RegistryListCommand, IAcrService>
 {
+    public RegistryListCommandTests()
+    {
+        Services.AddSingleton(Substitute.For<IPaginationCursorRegistry>());
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PaginationOptions()));
+    }
     [Fact]
     public void Constructor_InitializesCommandCorrectly()
     {

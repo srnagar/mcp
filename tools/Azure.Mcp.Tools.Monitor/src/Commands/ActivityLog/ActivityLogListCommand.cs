@@ -43,7 +43,10 @@ public sealed class ActivityLogListCommand(ILogger<ActivityLogListCommand> logge
     private readonly IPaginationCursorRegistry _cursorRegistry = cursorRegistry;
     private readonly PaginationOptions _paginationOptions = paginationOptions.Value;
 
-    internal record ActivityLogListCommandResult(List<ActivityLogEventData> ActivityLogs);
+    internal record ActivityLogListCommandResult(
+        List<ActivityLogEventData> ActivityLogs,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        PaginationInfo? Pagination);
 
     protected override void RegisterOptions(Command command)
     {

@@ -6,7 +6,10 @@ using Azure.Mcp.Tools.Monitor.Commands;
 using Azure.Mcp.Tools.Monitor.Commands.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Models.ActivityLog;
 using Azure.Mcp.Tools.Monitor.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Options;
+using Microsoft.Mcp.Core.Services.Pagination;
 using Microsoft.Mcp.Tests.Client;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -18,6 +21,12 @@ public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityL
 {
     private const string _knownSubscription = "knownSubscription";
     private const string _knownResourceName = "myResource";
+
+    public ActivityLogListCommandTests()
+    {
+        Services.AddSingleton(Substitute.For<IPaginationCursorRegistry>());
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PaginationOptions()));
+    }
 
     [Theory]
     [InlineData($"--subscription {_knownSubscription} --resource-name {_knownResourceName}", true)]
@@ -107,10 +116,9 @@ public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityL
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
             Arg.Any<string>(),
-            Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
-            .Returns(new ActivityLogPagedResult(expectedActivityLogs, null));
+            .Returns(expectedActivityLogs);
 
         // Act
         var response = await ExecuteCommandAsync(
@@ -127,7 +135,6 @@ public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityL
             Arg.Any<double>(),
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
-            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>());
@@ -153,7 +160,6 @@ public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityL
             Arg.Any<double>(),
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
-            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
@@ -182,7 +188,6 @@ public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityL
             Arg.Any<double>(),
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
-            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())
@@ -216,7 +221,6 @@ public sealed class ActivityLogListCommandTests : CommandUnitTestsBase<ActivityL
             Arg.Any<double>(),
             Arg.Any<ActivityLogEventLevel?>(),
             Arg.Any<int>(),
-            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<RetryPolicyOptions>(),
             Arg.Any<CancellationToken>())

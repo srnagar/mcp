@@ -5,7 +5,10 @@ using System.Net;
 using Azure.Mcp.Tools.EventGrid.Commands;
 using Azure.Mcp.Tools.EventGrid.Commands.Topic;
 using Azure.Mcp.Tools.EventGrid.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Mcp.Core.Models.Pagination;
 using Microsoft.Mcp.Core.Options;
+using Microsoft.Mcp.Core.Services.Pagination;
 using Microsoft.Mcp.Tests.Client;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -15,6 +18,11 @@ namespace Azure.Mcp.Tools.EventGrid.UnitTests.Topic;
 
 public class TopicListCommandTests : CommandUnitTestsBase<TopicListCommand, IEventGridService>
 {
+    public TopicListCommandTests()
+    {
+        Services.AddSingleton(Substitute.For<IPaginationCursorRegistry>());
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PaginationOptions()));
+    }
     [Fact]
     public async Task ExecuteAsync_NoParameters_ReturnsTopics()
     {

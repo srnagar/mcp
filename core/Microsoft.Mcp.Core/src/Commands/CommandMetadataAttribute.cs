@@ -49,6 +49,9 @@ public sealed class CommandMetadataAttribute : Attribute
     /// <summary>Whether the tool requires local execution. Default: false.</summary>
     public bool LocalRequired { get; init; }
 
+    /// <summary>Whether the tool supports paginated results. Default: false.</summary>
+    public bool SupportsPagination { get; init; }
+
     internal ToolMetadata ToToolMetadata() => new()
     {
         Destructive = Destructive,
@@ -56,6 +59,7 @@ public sealed class CommandMetadataAttribute : Attribute
         OpenWorld = OpenWorld,
         ReadOnly = ReadOnly,
         Secret = Secret,
-        LocalRequired = LocalRequired
+        LocalRequired = LocalRequired,
+        SupportsPagination = SupportsPagination
     };
 }

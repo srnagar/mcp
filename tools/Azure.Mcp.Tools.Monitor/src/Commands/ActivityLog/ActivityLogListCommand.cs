@@ -46,7 +46,7 @@ public sealed class ActivityLogListCommand(ILogger<ActivityLogListCommand> logge
     internal record ActivityLogListCommandResult(
         List<ActivityLogEventData> ActivityLogs,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        PaginationInfo? Pagination);
+        string? NextCursor);
 
     protected override void RegisterOptions(Command command)
     {
@@ -88,12 +88,11 @@ public sealed class ActivityLogListCommand(ILogger<ActivityLogListCommand> logge
             if (_paginationOptions.Enabled)
             {
                 var toolName = $"monitor_activitylog_{Name}";
-                var sessionId = context.Activity?.Id ?? "default";
                 var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
                 string? nextLink = null;
                 var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                    _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
+                    _cursorRegistry, options.Cursor, toolName, requestHash, cancellationToken);
 
                 if (cursorEntry is not null)
                 {
@@ -122,12 +121,11 @@ public sealed class ActivityLogListCommand(ILogger<ActivityLogListCommand> logge
                     };
 
                     nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                        toolName, requestHash, continuationState, cancellationToken);
                 }
 
-                var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
                 context.Response.Results = ResponseResult.Create(
-                    new ActivityLogListCommandResult(result.Items, pagination),
+                    new ActivityLogListCommandResult(result.Items, nextCursor),
                     MonitorJsonContext.Default.ActivityLogListCommandResult);
             }
             else

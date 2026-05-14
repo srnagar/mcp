@@ -65,12 +65,11 @@ public sealed class TopicListCommand(ILogger<TopicListCommand> logger, IEventGri
             if (_paginationOptions.Enabled)
             {
                 var toolName = $"eventgrid_topic_{Name}";
-                var sessionId = context.Activity?.Id ?? "default";
                 var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
                 string? armContinuationToken = null;
                 var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                    _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
+                    _cursorRegistry, options.Cursor, toolName, requestHash, cancellationToken);
 
                 if (cursorEntry is not null)
                 {
@@ -95,12 +94,11 @@ public sealed class TopicListCommand(ILogger<TopicListCommand> logger, IEventGri
                     };
 
                     nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                        toolName, requestHash, continuationState, cancellationToken);
                 }
 
-                var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
                 context.Response.Results = ResponseResult.Create(
-                    new TopicListCommandResult(result.Items, pagination),
+                    new TopicListCommandResult(result.Items, nextCursor),
                     EventGridJsonContext.Default.TopicListCommandResult);
             }
             else
@@ -131,5 +129,5 @@ public sealed class TopicListCommand(ILogger<TopicListCommand> logger, IEventGri
     internal record TopicListCommandResult(
         List<EventGridTopicInfo> Topics,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        PaginationInfo? Pagination);
+        string? NextCursor);
 }

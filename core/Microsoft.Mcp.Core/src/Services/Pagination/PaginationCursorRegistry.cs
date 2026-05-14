@@ -23,7 +23,6 @@ public sealed class PaginationCursorRegistry(
 
     public ValueTask<string> CreateAsync(
         string toolName,
-        string sessionId,
         string requestHash,
         ContinuationState continuationState,
         CancellationToken cancellationToken = default)
@@ -33,7 +32,6 @@ public sealed class PaginationCursorRegistry(
         var entry = new PaginationCursorEntry
         {
             ToolName = toolName,
-            SessionId = sessionId,
             RequestHash = requestHash,
             ContinuationState = continuationState,
             CreatedAt = DateTimeOffset.UtcNow
@@ -42,8 +40,8 @@ public sealed class PaginationCursorRegistry(
         _cache.Set(cursorId, entry, _options.CursorTimeToLive);
 
         _logger.LogDebug(
-            "Created pagination cursor {CursorId} for tool {ToolName}, session {SessionId}.",
-            cursorId, toolName, sessionId);
+            "Created pagination cursor {CursorId} for tool {ToolName}.",
+            cursorId, toolName);
 
         return new ValueTask<string>(cursorId);
     }
@@ -51,7 +49,6 @@ public sealed class PaginationCursorRegistry(
     public ValueTask<PaginationCursorEntry?> GetAsync(
         string cursorId,
         string toolName,
-        string sessionId,
         string requestHash,
         CancellationToken cancellationToken = default)
     {
@@ -70,14 +67,6 @@ public sealed class PaginationCursorRegistry(
                 cursorId, toolName, entry.ToolName);
             return new ValueTask<PaginationCursorEntry?>(result: null);
         }
-
-        // if (!string.Equals(entry.SessionId, sessionId, StringComparison.Ordinal))
-        // {
-        //     _logger.LogWarning(
-        //         "Pagination cursor {CursorId} session mismatch for tool {ToolName}.",
-        //         cursorId, toolName);
-        //     return null;
-        // }
 
         if (!string.Equals(entry.RequestHash, requestHash, StringComparison.Ordinal))
         {
@@ -103,24 +92,6 @@ public sealed class PaginationCursorRegistry(
         }
 
         return new ValueTask<bool>(removed);
-    }
-
-    public ValueTask ClearSessionAsync(
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        var entries = _cache.GetAll();
-
-        foreach (var kvp in entries)
-        {
-            if (string.Equals(kvp.Value.SessionId, sessionId, StringComparison.Ordinal))
-            {
-                _cache.Remove(kvp.Key);
-            }
-        }
-
-        _logger.LogDebug("Cleared all pagination cursors for session {SessionId}.", sessionId);
-        return ValueTask.CompletedTask;
     }
 
     public ValueTask ClearAllAsync(CancellationToken cancellationToken = default)

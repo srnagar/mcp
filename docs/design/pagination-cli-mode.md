@@ -49,7 +49,7 @@ When `PaginationOptions.Enabled` is `false`, paginated commands:
 
 1. **Call the original non-paged service methods** — e.g., `GetTopicsAsync()` instead of `GetTopicsPagedAsync()`, returning all available results.
 2. **Skip cursor resolution** — the `--cursor` option is ignored and no cursor lookup occurs.
-3. **Omit pagination from the response** — `PaginationInfo` is set to `null` and excluded from JSON output via `JsonIgnoreCondition.WhenWritingNull`.
+3. **Omit pagination from the response** — `NextCursor` is set to `null` and excluded from JSON output via `JsonIgnoreCondition.WhenWritingNull`.
 
 ### What the user sees
 
@@ -88,7 +88,7 @@ This is why the `Enabled` flag exists — to prevent commands from creating curs
 | **Process lifetime** | Seconds (one-shot) | Hours (persistent child process) |
 | **PaginationOptions.Enabled** | `false` (default) | `true` (set by `AddAzureMcpServer`) |
 | **Service methods called** | Non-paged (returns all results) | Paged (returns `pageSize` items) |
-| **Pagination in response** | Omitted | Included (`nextCursor`, `pageSize`) |
+| **Pagination in response** | Omitted | Included (`nextCursor`) |
 | **Cursor persistence** | N/A (no cursors created) | ✅ Works (same process across calls) |
 | **Who calls the tool** | Human user in terminal | LLM agent via JSON-RPC |
 

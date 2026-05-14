@@ -95,7 +95,7 @@ graph TB
 | Component | Responsibility |
 |---|---|
 | **Tool Command** | Accepts `cursor`, computes request hash, resolves cursor via registry, calls service for one page, stores new cursor if more pages exist |
-| **PaginationCursorRegistry** | Creates and retrieves cursor entries (opaque GUID IDs). On retrieval, validates tool name, session, and request-hash consistency. |
+| **PaginationCursorRegistry** | Creates and retrieves cursor entries (opaque GUID IDs). On retrieval, validates tool name and request-hash consistency. |
 | **PaginationCursorCache** | Dedicated in-memory store for pagination cursor entries. Uses `ConcurrentDictionary` with absolute TTL expiration. |
 | **Azure Service Layer** | Fetches one page of results using backend-specific pagination (offset, continuation token, nextLink, etc.) |
 
@@ -121,10 +121,11 @@ Every paginated tool accepts an optional `cursor` parameter alongside its existi
 When `cursor` is provided, the server validates that:
 1. The cursor exists and has not expired
 2. The cursor was issued by the same tool
-3. The cursor belongs to the same session (in HTTP mode)
-4. The request parameters (excluding `cursor`) hash to the same value as the original request
+3. The request parameters (excluding `cursor`) hash to the same value as the original request
 
 ### Response schema
+
+The tool result includes a `nextCursor` field at the top level alongside the items, following the [MCP pagination specification](https://modelcontextprotocol.io/specification/2025-03-26/server/utilities/pagination):
 
 ```json
 {
@@ -134,10 +135,7 @@ When `cursor` is provided, the server validates that:
       { "name": "myregistry-prod", "location": "eastus", "sku": "Premium" },
       { "name": "myregistry-dev", "location": "westus", "sku": "Standard" }
     ],
-    "pagination": {
-      "nextCursor": "c_abc123def456",
-      "pageSize": 50
-    }
+    "nextCursor": "c_abc123def456"
   },
   "duration": 234
 }
@@ -145,8 +143,7 @@ When `cursor` is provided, the server validates that:
 
 | Field | Type | Description |
 |---|---|---|
-| `pagination.nextCursor` | `string?` | Opaque cursor for the next page. `null` when this is the last page. |
-| `pagination.pageSize` | `int` | Number of items requested per page (may differ from items returned on last page). |
+| `nextCursor` | `string?` | Opaque cursor for the next page. Omitted when this is the last page. |
 
 ### Tool metadata
 
@@ -167,7 +164,7 @@ This is surfaced to MCP clients as a `paginationHint` annotation in the tool lis
 
 Paginated tools append the following to their description:
 
-> Returns up to {pageSize} items per request. If `pagination.nextCursor` is non-null in the response, more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned `nextCursor` value as the `cursor` parameter. Always confirm with the user before fetching additional pages.
+> Returns up to {pageSize} items per request. If `nextCursor` is non-null in the response, more results are available. To fetch the next page, call this tool again with the same parameters and pass the returned `nextCursor` value as the `cursor` parameter. Always confirm with the user before fetching additional pages.
 
 
 ### Server-level pagination instructions
@@ -195,7 +192,7 @@ flowchart TD
     D --> E["Call Azure service<br/>skip=0, limit=pageSize"]
 
     C -->|Yes| B["ComputeRequestHash from args"]
-    B --> F["ResolveCursorAsync calls<br/>CursorRegistry.GetAsync<br/>validates: toolName, sessionId,<br/>requestHash match"]
+    B --> F["ResolveCursorAsync calls<br/>CursorRegistry.GetAsync<br/>validates: toolName,<br/>requestHash match"]
     F -->|Valid| G["Extract continuation state<br/>from cursor entry"]
     G --> H["Call Azure service<br/>using continuation state"]
 
@@ -221,7 +218,6 @@ When a tool receives a request without `cursor` (or with `cursor = null`):
    ```csharp
    var cursorId = await _cursorRegistry.CreateAsync(
        toolName: "azmcp_acr_registry_list",
-       sessionId: context.SessionId,
        requestHash: ComputeRequestHash(options),
        continuationState: new ContinuationState { Offset = "50" },
        cancellationToken);
@@ -236,7 +232,6 @@ Each cursor entry is stored in the `PaginationCursorCache` with the following st
 public sealed class PaginationCursorEntry
 {
     public required string ToolName { get; init; }
-    public required string SessionId { get; init; }
     public required string RequestHash { get; init; }
     public required ContinuationState ContinuationState { get; set; }
     public DateTimeOffset CreatedAt { get; init; }
@@ -288,11 +283,10 @@ Each page in a listing gets its own unique cursor ID because each `CreateAsync` 
 When a tool receives a request with a non-null `cursor`:
 
 1. The tool computes the request hash from the current parameters (excluding `cursor`).
-2. It calls `_cursorRegistry.GetAsync(cursorId, toolName, sessionId, requestHash)`.
+2. It calls `_cursorRegistry.GetAsync(cursorId, toolName, requestHash)`.
 3. The registry validates:
    - **Existence:** The cursor ID exists in the cache (not expired).
    - **Tool match:** The stored `ToolName` matches the requesting tool.
-   - **Session match:** The stored `SessionId` matches the current session (prevents cross-user reuse in HTTP mode).
    - **Request hash match:** The stored `RequestHash` matches the computed hash (prevents parameter tampering between pages).
 4. If validation passes, the `ContinuationState` is extracted and used to fetch the next page from Azure.
 5. If the service returns more results, a new cursor is created via `_cursorRegistry.CreateAsync()` with the new continuation state.
@@ -304,7 +298,7 @@ Cursors are evicted in two ways:
 
 1. **Natural TTL expiry.** The `PaginationCursorCache` automatically evicts entries after `CursorTimeToLive` (default 1 hour). This handles abandoned cursors (e.g., the user stopped paging) and consumed cursors that are no longer needed for retries.
 
-2. **Manual clear.** `ClearAllAsync()` removes all cursors across all sessions. This is an administrative operation.
+2. **Manual clear.** `ClearAllAsync()` removes all cursors. This is an administrative operation.
 
 > **Note:** Cursors are **not** explicitly deleted when the last page is reached. This is intentional — the consumed cursor must remain available for client-side retries. All cleanup relies on TTL expiry or manual cleanup.
 
@@ -324,18 +318,18 @@ sequenceDiagram
     Azure-->>Server: Page 1 results (truncated flag or continuation token)
     alt More pages available
         Server->>Server: Construct continuationState from response
-        Server->>Registry: CreateAsync(toolName, sessionId, requestHash, continuationState)
+        Server->>Registry: CreateAsync(toolName, requestHash, continuationState)
         Note over Registry: cursorId = new GUID
         Registry-->>Server: cursorId = "a1b2c3d4..."
-        Server-->>Client: { items: [...], pagination: { nextCursor: "a1b2c3d4...", pageSize: 50 } }
+        Server-->>Client: { items: [...], nextCursor: "a1b2c3d4..." }
     else No more pages
-        Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
+        Server-->>Client: { items: [...] }
     end
 
     Note over Client,Azure: Subsequent Page Request
     Client->>Server: CallTool(args: { subscription, cursor: "a1b2c3d4..." })
     Server->>Server: ComputeRequestHash(args)
-    Server->>Registry: ResolveCursorAsync → GetAsync("a1b2c3d4...", toolName, sessionId, requestHash)
+    Server->>Registry: ResolveCursorAsync → GetAsync("a1b2c3d4...", toolName, requestHash)
     Note over Registry: Validates toolName + requestHash match stored entry
     Registry-->>Server: PaginationCursorEntry (validated)
     Server->>Server: Extract continuation state from entry
@@ -343,12 +337,12 @@ sequenceDiagram
     Azure-->>Server: Page N results (truncated flag or continuation token)
     alt More pages available
         Server->>Server: Construct new continuationState from response
-        Server->>Registry: CreateAsync(toolName, sessionId, requestHash, newContinuationState)
+        Server->>Registry: CreateAsync(toolName, requestHash, newContinuationState)
         Note over Registry: cursorId = new GUID
         Registry-->>Server: cursorId = "e5f6g7h8..."
-        Server-->>Client: { items: [...], pagination: { nextCursor: "e5f6g7h8...", pageSize: 50 } }
+        Server-->>Client: { items: [...], nextCursor: "e5f6g7h8..." }
     else No more pages
-        Server-->>Client: { items: [...], pagination: { nextCursor: null, pageSize: 50 } }
+        Server-->>Client: { items: [...] }
     end
 ```
 

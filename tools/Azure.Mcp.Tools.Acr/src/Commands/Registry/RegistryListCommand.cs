@@ -62,16 +62,14 @@ public sealed class RegistryListCommand(ILogger<RegistryListCommand> logger, IAc
         try
         {
             int skip = 0;
-            PaginationInfo? pagination = null;
 
             if (_paginationOptions.Enabled)
             {
                 var toolName = $"acr_registry_{Name}";
-                var sessionId = context.Activity?.Id ?? "default";
                 var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
                 var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                    _cursorRegistry, options.Cursor, toolName, sessionId, requestHash, cancellationToken);
+                    _cursorRegistry, options.Cursor, toolName, requestHash, cancellationToken);
 
                 if (cursorEntry is not null &&
                     cursorEntry.ContinuationState.Offset is { } offsetStr &&
@@ -100,12 +98,11 @@ public sealed class RegistryListCommand(ILogger<RegistryListCommand> logger, IAc
                     };
 
                     nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                        toolName, requestHash, continuationState, cancellationToken);
                 }
 
-                pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
                 context.Response.Results = ResponseResult.Create(
-                    new RegistryListCommandResult(registries?.Results ?? [], pagination),
+                    new RegistryListCommandResult(registries?.Results ?? [], nextCursor),
                     AcrJsonContext.Default.RegistryListCommandResult);
             }
             else
@@ -138,5 +135,5 @@ public sealed class RegistryListCommand(ILogger<RegistryListCommand> logger, IAc
     internal record RegistryListCommandResult(
         List<Models.AcrRegistryInfo> Registries,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        PaginationInfo? Pagination);
+        string? NextCursor);
 }

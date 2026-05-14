@@ -76,14 +76,15 @@ public sealed class RegistryListCommand(
 
         try
         {
-            var toolName = $"acr_registry_{Name}";
-            var sessionId = context.Activity?.Id ?? "default";
-            var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
-
-            // Resolve cursor — returns null for first page, entry with state for subsequent pages
             int skip = 0;
-            var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                _cursorRegistry, options.NextCursor, toolName, sessionId, requestHash, cancellationToken);
+
+            if (_paginationOptions.Enabled)
+            {
+                var toolName = $"acr_registry_{Name}";
+                var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
+
+                var cursorEntry = await PaginationHelper.ResolveCursorAsync(
+                    _cursorRegistry, options.Cursor, toolName, requestHash, cancellationToken);
 
             if (cursorEntry is not null &&
                 cursorEntry.ContinuationState.TryGetValue("offset", out var offsetStr) &&
@@ -120,18 +121,28 @@ public sealed class RegistryListCommand(
                 else
                 {
                     nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                        toolName, requestHash, continuationState, cancellationToken);
                 }
-            }
-            else if (options.NextCursor is not null)
-            {
-                await _cursorRegistry.DeleteAsync(options.NextCursor, cancellationToken);
-            }
 
-            var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
-            context.Response.Results = ResponseResult.Create(
-                new RegistryListCommandResult(registries?.Results ?? [], pagination),
-                AcrJsonContext.Default.RegistryListCommandResult);
+                context.Response.Results = ResponseResult.Create(
+                    new RegistryListCommandResult(registries?.Results ?? [], nextCursor),
+                    AcrJsonContext.Default.RegistryListCommandResult);
+            }
+            else
+            {
+                _logger.LogInformation("Listing container registries (non-paginated). Subscription: {Subscription}, ResourceGroup: {ResourceGroup}", options.Subscription, options.ResourceGroup);
+
+                var registries = await _acrService.ListRegistries(
+                    options.Subscription!,
+                    options.ResourceGroup,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    cancellationToken);
+
+                context.Response.Results = ResponseResult.Create(
+                    new RegistryListCommandResult(registries?.Results ?? [], null),
+                    AcrJsonContext.Default.RegistryListCommandResult);
+            }
         }
         catch (Exception ex)
         {
@@ -144,5 +155,8 @@ public sealed class RegistryListCommand(
         return context.Response;
     }
 
-    internal record RegistryListCommandResult(List<Models.AcrRegistryInfo> Registries, PaginationInfo Pagination);
+    internal record RegistryListCommandResult(
+        List<Models.AcrRegistryInfo> Registries,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? NextCursor);
 }

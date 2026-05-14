@@ -73,28 +73,12 @@ public static class PaginationHelper
     }
 
     /// <summary>
-    /// Creates a <see cref="PaginationInfo"/> for inclusion in the command response.
-    /// </summary>
-    /// <param name="nextCursor">The cursor for the next page, or <see langword="null"/> if this is the last page.</param>
-    /// <param name="pageSize">The number of items per page.</param>
-    /// <returns>A pagination info object.</returns>
-    public static PaginationInfo CreatePaginationInfo(string? nextCursor, int pageSize)
-    {
-        return new PaginationInfo
-        {
-            NextCursor = nextCursor,
-            PageSize = pageSize
-        };
-    }
-
-    /// <summary>
     /// Retrieves the continuation state for a cursor, creating a new request context for
     /// the first page or validating and retrieving an existing cursor for subsequent pages.
     /// </summary>
     /// <param name="registry">The pagination cursor registry.</param>
     /// <param name="nextCursor">The cursor from the client request, or <see langword="null"/> for the first page.</param>
     /// <param name="toolName">The name of the tool making the request.</param>
-    /// <param name="sessionId">The session/user identity.</param>
     /// <param name="requestHash">The hash of the request parameters.</param>
     /// <param name="cancellationToken">A token to cancel the operation.</param>
     /// <returns>The cursor entry with continuation state, or <see langword="null"/> for the first page.</returns>
@@ -103,7 +87,6 @@ public static class PaginationHelper
         IPaginationCursorRegistry registry,
         string? nextCursor,
         string toolName,
-        string sessionId,
         string requestHash,
         CancellationToken cancellationToken = default)
     {
@@ -112,7 +95,7 @@ public static class PaginationHelper
             return null;
         }
 
-        var entry = await registry.GetAsync(nextCursor, toolName, sessionId, requestHash, cancellationToken);
+        var entry = await registry.GetAsync(cursor, toolName, requestHash, cancellationToken);
 
         if (entry is null)
         {

@@ -77,14 +77,14 @@ public sealed class TopicListCommand(
 
         try
         {
-            var toolName = $"eventgrid_topic_{Name}";
-            var sessionId = context.Activity?.Id ?? "default";
-            var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
+            if (_paginationOptions.Enabled)
+            {
+                var toolName = $"eventgrid_topic_{Name}";
+                var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
-            // Resolve cursor for continuation token
-            string? armContinuationToken = null;
-            var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                _cursorRegistry, options.NextCursor, toolName, sessionId, requestHash, cancellationToken);
+                string? armContinuationToken = null;
+                var cursorEntry = await PaginationHelper.ResolveCursorAsync(
+                    _cursorRegistry, options.Cursor, toolName, requestHash, cancellationToken);
 
             if (cursorEntry is not null)
             {
@@ -117,18 +117,26 @@ public sealed class TopicListCommand(
                 else
                 {
                     nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                        toolName, requestHash, continuationState, cancellationToken);
                 }
-            }
-            else if (options.NextCursor is not null)
-            {
-                await _cursorRegistry.DeleteAsync(options.NextCursor, cancellationToken);
-            }
 
-            var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
-            context.Response.Results = ResponseResult.Create(
-                new TopicListCommandResult(result.Items, pagination),
-                EventGridJsonContext.Default.TopicListCommandResult);
+                context.Response.Results = ResponseResult.Create(
+                    new TopicListCommandResult(result.Items, nextCursor),
+                    EventGridJsonContext.Default.TopicListCommandResult);
+            }
+            else
+            {
+                var topics = await _eventGridService.GetTopicsAsync(
+                    options.Subscription!,
+                    options.ResourceGroup,
+                    options.Tenant,
+                    options.RetryPolicy,
+                    cancellationToken);
+
+                context.Response.Results = ResponseResult.Create(
+                    new TopicListCommandResult(topics, null),
+                    EventGridJsonContext.Default.TopicListCommandResult);
+            }
         }
         catch (Exception ex)
         {
@@ -141,5 +149,8 @@ public sealed class TopicListCommand(
         return context.Response;
     }
 
-    internal record TopicListCommandResult(List<EventGridTopicInfo> Topics, PaginationInfo Pagination);
+    internal record TopicListCommandResult(
+        List<EventGridTopicInfo> Topics,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? NextCursor);
 }

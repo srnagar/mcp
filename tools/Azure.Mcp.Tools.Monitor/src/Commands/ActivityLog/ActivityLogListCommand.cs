@@ -39,23 +39,26 @@ public sealed class ActivityLogListCommand(
         Lists activity logs for the specified Azure resource over the given prior number of hours.
         This command retrieves activity logs to help understand resource deployment history, modification activities, and access patterns.
         Returns activity log events with details including timestamp, operation name, status, and caller information. should be called to help retrieve information about why a resource failed to deploy or may not be working.
-        Returns up to {_paginationOptions.DefaultPageSize} items per request. If pagination.nextCursor is non-null in the response,
-        more results are available. To fetch the next page, call this tool again with the same parameters and the returned
-        nextCursor value. Always confirm with the user before fetching additional pages.
-        """;
+        """,
+    Destructive = false,
+    Idempotent = true,
+    OpenWorld = false,
+    ReadOnly = true,
+    Secret = false,
+    LocalRequired = false,
+    SupportsPagination = true)]
+public sealed class ActivityLogListCommand(ILogger<ActivityLogListCommand> logger, IMonitorService monitorService, IPaginationCursorRegistry cursorRegistry, IOptions<PaginationOptions> paginationOptions)
+    : SubscriptionCommand<ActivityLogListOptions>
+{
+    private readonly ILogger<ActivityLogListCommand> _logger = logger;
+    private readonly IMonitorService _monitorService = monitorService;
+    private readonly IPaginationCursorRegistry _cursorRegistry = cursorRegistry;
+    private readonly PaginationOptions _paginationOptions = paginationOptions.Value;
 
-    public override string Title => CommandTitle;
-
-    public override ToolMetadata Metadata => new()
-    {
-        Destructive = false,
-        OpenWorld = false,
-        Idempotent = true,
-        ReadOnly = true,
-        Secret = false,
-        LocalRequired = false,
-        SupportsPagination = true
-    };
+    internal record ActivityLogListCommandResult(
+        List<ActivityLogEventData> ActivityLogs,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? NextCursor);
 
     protected override void RegisterOptions(Command command)
     {
@@ -93,14 +96,15 @@ public sealed class ActivityLogListCommand(
         try
         {
             var service = context.GetService<IMonitorService>();
-            var toolName = $"monitor_activitylog_{Name}";
-            var sessionId = context.Activity?.Id ?? "default";
-            var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
 
-            // Resolve cursor for nextLink
-            string? nextLink = null;
-            var cursorEntry = await PaginationHelper.ResolveCursorAsync(
-                _cursorRegistry, options.NextCursor, toolName, sessionId, requestHash, cancellationToken);
+            if (_paginationOptions.Enabled)
+            {
+                var toolName = $"monitor_activitylog_{Name}";
+                var requestHash = PaginationHelper.ComputeRequestHash(parseResult, GetCommand());
+
+                string? nextLink = null;
+                var cursorEntry = await PaginationHelper.ResolveCursorAsync(
+                    _cursorRegistry, options.Cursor, toolName, requestHash, cancellationToken);
 
             if (cursorEntry is not null)
             {
@@ -137,18 +141,30 @@ public sealed class ActivityLogListCommand(
                 else
                 {
                     nextCursor = await _cursorRegistry.CreateAsync(
-                        toolName, sessionId, requestHash, continuationState, cancellationToken);
+                        toolName, requestHash, continuationState, cancellationToken);
                 }
-            }
-            else if (options.NextCursor is not null)
-            {
-                await _cursorRegistry.DeleteAsync(options.NextCursor, cancellationToken);
-            }
 
-            var pagination = PaginationHelper.CreatePaginationInfo(nextCursor, pageSize);
-            context.Response.Results = ResponseResult.Create(
-                new ActivityLogListCommandResult(result.Items, pagination),
-                MonitorJsonContext.Default.ActivityLogListCommandResult);
+                context.Response.Results = ResponseResult.Create(
+                    new ActivityLogListCommandResult(result.Items, nextCursor),
+                    MonitorJsonContext.Default.ActivityLogListCommandResult);
+            }
+            else
+            {
+                var activityLogs = await service.ListActivityLogs(
+                    options.Subscription!,
+                    options.ResourceName!,
+                    options.ResourceGroup,
+                    options.ResourceType,
+                    options.Hours ?? 24.0,
+                    options.EventLevel,
+                    tenant: options.Tenant,
+                    retryPolicy: options.RetryPolicy,
+                    cancellationToken: cancellationToken);
+
+                context.Response.Results = ResponseResult.Create(
+                    new ActivityLogListCommandResult(activityLogs, null),
+                    MonitorJsonContext.Default.ActivityLogListCommandResult);
+            }
         }
         catch (Exception ex)
         {
